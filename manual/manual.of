@@ -59,7 +59,11 @@ see Roberto's book, @emphx{Programming in Lua}.
 @C{-------------------------------------------------------------------------}
 @sect1{basic| @title{Basic Concepts}
 
+@simplesect{
+
 This section describes the basic concepts of the language.
+
+}
 
 @sect2{TypesSec| @title{Values and Types}
 
@@ -82,7 +86,8 @@ whose main property is to be different from any other value;
 it often represents the absence of a useful value.
 The type @emph{boolean} has two values, @false and @true.
 Both @nil and @false make a condition false;
-any other value makes it true.
+they are collectively called @def{false values}.
+Any other value makes a condition true.
 
 The type @emph{number} represents both
 integer numbers and real (floating-point) numbers,
@@ -94,6 +99,14 @@ The option with 32 bits for both integers and floats
 is particularly attractive
 for small machines and embedded systems.
 (See macro @id{LUA_32BITS} in file @id{luaconf.h}.)
+
+Unless stated otherwise,
+any overflow when manipulating integer values @def{wrap around},
+according to the usual rules of two-complement arithmetic.
+(In other words,
+the actual result is the unique representable integer
+that is equal modulo @M{2@sp{n}} to the mathematical result,
+where @M{n} is the number of bits of the integer type.)
 
 Lua has explicit rules about when each subtype is used,
 but it also converts between them automatically as needed @see{coercion}.
@@ -223,7 +236,7 @@ In Lua, the global variable @Lid{_G} is initialized with this same value.
 so changing its value will affect only your own code.)
 
 When Lua loads a chunk,
-the default value for its @id{_ENV} upvalue
+the default value for its @id{_ENV} variable
 is the global environment @seeF{load}.
 Therefore, by default,
 free names in Lua code refer to entries in the global environment
@@ -233,39 +246,53 @@ and some functions there operate on that environment.
 You can use @Lid{load} (or @Lid{loadfile})
 to load a chunk with a different environment.
 (In C, you have to load the chunk and then change the value
-of its first upvalue.)
+of its first upvalue; see @See{lua_setupvalue}.)
 
 }
 
 @sect2{error| @title{Error Handling}
 
+Several operations in Lua can @emph{raise} an error.
+An error interrupts the normal flow of the program,
+which can continue by @emph{catching} the error.
+
+Lua code can explicitly raise an error by calling the
+@Lid{error} function.
+(This function never returns.)
+
+To catch errors in Lua,
+you can do a @def{protected call},
+using @Lid{pcall} (or @Lid{xpcall}).
+The function @Lid{pcall} calls a given function in @def{protected mode}.
+Any error while running the function stops its execution,
+and control returns immediately to @id{pcall},
+which returns a status code.
+
 Because Lua is an embedded extension language,
-all Lua actions start from @N{C code} in the host program
-calling a function from the Lua library.
+Lua code starts running by a call
+from @N{C code} in the host program.
 (When you use Lua standalone,
 the @id{lua} application is the host program.)
-Whenever an error occurs during
+Usually, this call is protected;
+so, when an otherwise unprotected error occurs during
 the compilation or execution of a Lua chunk,
 control returns to the host,
-which can take appropriate measures
-(such as printing an error message).
-
-Lua code can explicitly generate an error by calling the
-@Lid{error} function.
-If you need to catch errors in Lua,
-you can use @Lid{pcall} or @Lid{xpcall}
-to call a given function in @emphx{protected mode}.
+which can take appropriate measures,
+such as printing an error message.
 
 Whenever there is an error,
-an @def{error object} (also called an @def{error message})
+an @def{error object}
 is propagated with information about the error.
 Lua itself only generates errors whose error object is a string,
 but programs may generate errors with
 any value as the error object.
 It is up to the Lua program or its host to handle such error objects.
+For historical reasons,
+an error object is often called an @def{error message},
+even though it does not have to be a string.
 
 
-When you use @Lid{xpcall} or @Lid{lua_pcall},
+When you use @Lid{xpcall} (or @Lid{lua_pcall}, in C)
 you may give a @def{message handler}
 to be called in case of errors.
 This function is called with the original error object
@@ -278,9 +305,9 @@ so, an error inside the message handler
 will call the message handler again.
 If this loop goes on for too long,
 Lua breaks it and returns an appropriate message.
-(The message handler is called only for regular runtime errors.
+The message handler is called only for regular runtime errors.
 It is not called for memory-allocation errors
-nor for errors while running finalizers.)
+nor for errors while running finalizers or other message handlers.
 
 Lua also offers a system of @emph{warnings} @seeF{warn}.
 Unlike errors, warnings do not interfere
@@ -295,9 +322,9 @@ although this behavior can be adapted from C @seeC{lua_setwarnf}.
 Every value in Lua can have a @emph{metatable}.
 This @def{metatable} is an ordinary Lua table
 that defines the behavior of the original value
-under certain special operations.
+under certain events.
 You can change several aspects of the behavior
-of operations over a value by setting specific fields in its metatable.
+of a value by setting specific fields in its metatable.
 For instance, when a non-numeric value is the operand of an addition,
 Lua checks for a function in the field @St{__add} of the value's metatable.
 If it finds one,
@@ -305,11 +332,14 @@ Lua calls this function to perform the addition.
 
 The key for each event in a metatable is a string
 with the event name prefixed by two underscores;
-the corresponding values are called @def{metamethods}.
-In the previous example, the key is @St{__add}
+the corresponding value is called a @def{metavalue}.
+For most events, the metavalue must be a function,
+which is then called a @def{metamethod}.
+In the previous example, the key is the string @St{__add}
 and the metamethod is the function that performs the addition.
 Unless stated otherwise,
-metamethods should be function values.
+a metamethod may in fact be any @x{callable value},
+which is either a function or a value with a @id{__call} metamethod.
 
 You can query the metatable of any value
 using the @Lid{getmetatable} function.
@@ -328,22 +358,10 @@ one for all strings, etc.
 By default, a value has no metatable,
 but the string library sets a metatable for the string type @see{strlib}.
 
-A metatable controls how an object behaves in
-arithmetic operations, bitwise operations,
-order comparisons, concatenation, length operation, calls, and indexing.
-A metatable also can define a function to be called
-when a userdata or a table is @link{GC|garbage collected}.
-
-For the unary operators (negation, length, and bitwise NOT),
-the metamethod is computed and called with a dummy second operand,
-equal to the first one.
-This extra operand is only to simplify Lua's internals
-(by making these operators behave like a binary operation)
-and may be removed in future versions.
-(For most uses this extra operand is irrelevant.)
-
-A detailed list of events controlled by metatables is given next.
-Each operation is identified by its corresponding key.
+A detailed list of operations controlled by metatables is given next.
+Each event is identified by its corresponding key.
+By convention, all metatable keys used by Lua are composed by
+two underscores followed by lowercase Latin letters.
 
 @description{
 
@@ -351,16 +369,16 @@ Each operation is identified by its corresponding key.
 the addition (@T{+}) operation.
 If any operand for an addition is not a number,
 Lua will try to call a metamethod.
-First, Lua will check the first operand (even if it is valid).
-If that operand does not define a metamethod for @idx{__add},
+It starts by checking the first operand (even if it is a number);
+if that operand does not define a metamethod for @idx{__add},
 then Lua will check the second operand.
 If Lua can find a metamethod,
 it calls the metamethod with the two operands as arguments,
 and the result of the call
 (adjusted to one value)
 is the result of the operation.
-Otherwise,
-it raises an error.
+Otherwise, if no metamethod is found,
+Lua raises an error.
 }
 
 @item{@idx{__sub}|
@@ -467,7 +485,7 @@ the less than (@T{<}) operation.
 Behavior similar to the addition operation,
 except that Lua will try a metamethod only when the values
 being compared are neither both numbers nor both strings.
-The result of the call is always converted to a boolean.
+Moreover, the result of the call is always converted to a boolean.
 }
 
 @item{@idx{__le}|
@@ -479,19 +497,19 @@ Behavior similar to the less than operation.
 The indexing access operation @T{table[key]}.
 This event happens when @id{table} is not a table or
 when @id{key} is not present in @id{table}.
-The metamethod is looked up in @id{table}.
+The metavalue is looked up in the metatable of @id{table}.
 
-Despite the name,
-the metamethod for this event can be either a function or a table.
+The metavalue for this event can be either a function, a table,
+or any value with an @id{__index} metavalue.
 If it is a function,
 it is called with @id{table} and @id{key} as arguments,
 and the result of the call
 (adjusted to one value)
 is the result of the operation.
-If it is a table,
-the final result is the result of indexing this table with @id{key}.
+Otherwise,
+the final result is the result of indexing this metavalue with @id{key}.
 This indexing is regular, not raw,
-and therefore can trigger another metamethod.
+and therefore can trigger another @id{__index} metavalue.
 }
 
 @item{@idx{__newindex}|
@@ -499,22 +517,24 @@ The indexing assignment @T{table[key] = value}.
 Like the index event,
 this event happens when @id{table} is not a table or
 when @id{key} is not present in @id{table}.
-The metamethod is looked up in @id{table}.
+The metavalue is looked up in the metatable of @id{table}.
 
 Like with indexing,
-the metamethod for this event can be either a function or a table.
+the metavalue for this event can be either a function, a table,
+or any value with an @id{__newindex} metavalue.
 If it is a function,
 it is called with @id{table}, @id{key}, and @id{value} as arguments.
-If it is a table,
-Lua does an indexing assignment to this table with the same key and value.
+Otherwise,
+Lua repeats the indexing assignment over this metavalue
+with the same key and value.
 This assignment is regular, not raw,
-and therefore can trigger another metamethod.
+and therefore can trigger another @id{__newindex} metavalue.
 
-Whenever there is a @idx{__newindex} metamethod,
+Whenever a @idx{__newindex} metavalue is invoked,
 Lua does not perform the primitive assignment.
-(If necessary,
+If needed,
 the metamethod itself can call @Lid{rawset}
-to do the assignment.)
+to do the assignment.
 }
 
 @item{@idx{__call}|
@@ -526,16 +546,29 @@ If present,
 the metamethod is called with @id{func} as its first argument,
 followed by the arguments of the original call (@id{args}).
 All results of the call
-are the result of the operation.
+are the results of the operation.
 This is the only metamethod that allows multiple results.
 }
 
 }
 
-It is a good practice to add all needed metamethods to a table
-before setting it as a metatable of some object.
-In particular, the @idx{__gc} metamethod works only when this order
-is followed @see{finalizers}.
+In addition to the previous list,
+the interpreter also respects the following keys in metatables:
+@idx{__gc} @see{finalizers},
+@idx{__close} @see{to-be-closed},
+@idx{__mode} @see{weak-table},
+and @idx{__name}.
+(The entry @idx{__name},
+when it contains a string,
+may be used by @Lid{tostring} and in error messages.)
+
+For the unary operators (negation, length, and bitwise NOT),
+the metamethod is computed and called with a dummy second operand,
+equal to the first one.
+This extra operand is only to simplify Lua's internals
+(by making these operators behave like a binary operation)
+and may be removed in future versions.
+For most uses this extra operand is irrelevant.
 
 Because metatables are regular tables,
 they can contain arbitrary fields,
@@ -544,19 +577,47 @@ Some functions in the standard library
 (e.g., @Lid{tostring})
 use other fields in metatables for their own purposes.
 
+It is a good practice to add all needed metamethods to a table
+before setting it as a metatable of some object.
+In particular, the @idx{__gc} metamethod works only when this order
+is followed @see{finalizers}.
+It is also a good practice to set the metatable of an object
+right after its creation.
+
 }
 
 @sect2{GC| @title{Garbage Collection}
+
+@simplesect{
 
 Lua performs automatic memory management.
 This means that
 you do not have to worry about allocating memory for new objects
 or freeing it when the objects are no longer needed.
 Lua manages memory automatically by running
-a @def{garbage collector} to collect all @emph{dead objects}
-(that is, objects that are no longer accessible from Lua).
+a @def{garbage collector} to collect all @emph{dead} objects.
 All memory used by Lua is subject to automatic management:
 strings, tables, userdata, functions, threads, internal structures, etc.
+
+An object is considered @def{dead}
+as soon as the collector can be sure the object
+will not be accessed again in the normal execution of the program.
+(@Q{Normal execution} here excludes finalizers,
+which can resurrect dead objects @see{finalizers},
+and excludes also operations using the debug library.)
+Note that the time when the collector can be sure that an object
+is dead may not coincide with the programmer's expectations.
+The only guarantees are that Lua will not collect an object
+that may still be accessed in the normal execution of the program,
+and it will eventually collect an object
+that is inaccessible from Lua.
+(Here,
+@emph{inaccessible from Lua} means that neither a variable nor
+another live object refer to the object.)
+Because Lua has no knowledge about @N{C code},
+it never collects objects accessible through the registry @see{registry},
+which includes the global environment @see{globalenv}.
+
 
 The garbage collector (GC) in Lua can work in two modes:
 incremental and generational.
@@ -575,7 +636,9 @@ or @Lid{collectgarbage} in Lua.
 You can also use these functions to control
 the collector directly (e.g., to stop and restart it).
 
-@sect3{@title{Incremental Garbage Collection}
+}
+
+@sect3{incmode| @title{Incremental Garbage Collection}
 
 In incremental mode,
 each GC cycle performs a mark-and-sweep collection in small steps
@@ -624,26 +687,16 @@ which means steps of approximately @N{8 Kbytes}.
 
 }
 
-@sect3{@title{Generational Garbage Collection}
+@sect3{genmode| @title{Generational Garbage Collection}
 
 In generational mode,
 the collector does frequent @emph{minor} collections,
 which traverses only objects recently created.
 If after a minor collection the use of memory is still above a limit,
-the collector does a @emph{major} collection,
+the collector does a stop-the-world @emph{major} collection,
 which traverses all objects.
 The generational mode uses two parameters:
-the @def{major multiplier} and the @def{the minor multiplier}.
-
-The major multiplier controls the frequency of major collections.
-For a major multiplier @M{x},
-a new major collection will be done when memory
-grows @M{x%} larger than the memory in use after the previous major
-collection.
-For instance, for a multiplier of 100,
-the collector will do a major collection when the use of memory
-gets larger than twice the use after the previous collection.
-The default value is 100; the maximum value is 1000.
+the @def{minor multiplier} and the @def{the major multiplier}.
 
 The minor multiplier controls the frequency of minor collections.
 For a minor multiplier @M{x},
@@ -655,6 +708,16 @@ the collector will do a minor collection when the use of memory
 gets 20% larger than the use after the previous major collection.
 The default value is 20; the maximum value is 200.
 
+The major multiplier controls the frequency of major collections.
+For a major multiplier @M{x},
+a new major collection will be done when memory
+grows @M{x%} larger than the memory in use after the previous major
+collection.
+For instance, for a multiplier of 100,
+the collector will do a major collection when the use of memory
+gets larger than twice the use after the previous collection.
+The default value is 100; the maximum value is 1000.
+
 }
 
 @sect3{finalizers| @title{Garbage-Collection Metamethods}
@@ -664,7 +727,7 @@ and, using the @N{C API},
 for full userdata @see{metatable}.
 These metamethods, called @def{finalizers},
 are called when the garbage collector detects that the
-corresponding table or userdata is unreachable.
+corresponding table or userdata is dead.
 Finalizers allow you to coordinate Lua's garbage collection
 with external resource management such as closing files,
 network or database connections,
@@ -679,7 +742,7 @@ Note that if you set a metatable without a @idx{__gc} field
 and later create that field in the metatable,
 the object will not be marked for finalization.
 
-When a marked object becomes unreachable,
+When a marked object becomes dead,
 it is not collected immediately by the garbage collector.
 Instead, Lua puts it in a list.
 After the collection,
@@ -708,10 +771,10 @@ However, if the finalizer stores the object in some global place
 then the resurrection is permanent.
 Moreover, if the finalizer marks a finalizing object for finalization again,
 its finalizer will be called again in the next cycle where the
-object is unreachable.
+object is dead.
 In any case,
 the object memory is freed only in a GC cycle where
-the object is unreachable and not marked for finalization.
+the object is dead and not marked for finalization.
 
 When you close a state @seeF{lua_close},
 Lua calls the finalizers of all objects marked for finalization,
@@ -751,7 +814,7 @@ In any case, if either the key or the value is collected,
 the whole pair is removed from the table.
 The weakness of a table is controlled by the
 @idx{__mode} field of its metatable.
-This field, if present, must be one of the following strings:
+This metavalue, if present, must be one of the following strings:
 @St{k}, for a table with weak keys;
 @St{v}, for a table with weak values;
 or @St{kv}, for a table with both weak keys and values.
@@ -864,7 +927,7 @@ Unlike @Lid{coroutine.resume},
 the function created by @Lid{coroutine.wrap}
 propagates any error to the caller.
 In this case,
-the function also kills the coroutine @seeF{coroutine.kill}.
+the function also closes the coroutine @seeF{coroutine.close}.
 
 As an example of how coroutines work,
 consider the following code:
@@ -912,6 +975,8 @@ and @Lid{lua_yield}.
 @C{-------------------------------------------------------------------------}
 @sect1{language| @title{The Language}
 
+@simplesect{
+
 This section describes the lexis, the syntax, and the semantics of Lua.
 In other words,
 this section describes
@@ -929,13 +994,15 @@ and other terminal symbols are shown like @bnfter{=}.
 The complete syntax of Lua can be found in @refsec{BNF}
 at the end of this manual.
 
+}
+
 @sect2{lexical| @title{Lexical Conventions}
 
 Lua is a @x{free-form} language.
 It ignores spaces and comments between lexical elements (@x{tokens}),
 except as delimiters between two tokens.
 In source code,
-Lua recognizes as spaces the standard ASCII white-space
+Lua recognizes as spaces the standard ASCII whitespace
 characters space, form feed, newline,
 carriage return, horizontal tab, and vertical tab.
 
@@ -990,7 +1057,7 @@ and @Char{\'} (apostrophe [single quote]).
 A backslash followed by a line break
 results in a newline in the string.
 The escape sequence @Char{\z} skips the following span
-of white-space characters,
+of whitespace characters,
 including line breaks;
 it is particularly useful to break and indent a long literal string
 into multiple lines without adding the newlines and spaces
@@ -1012,7 +1079,7 @@ it must be expressed using exactly three digits.)
 The @x{UTF-8} encoding of a @x{Unicode} character
 can be inserted in a literal string with
 the escape sequence @T{\u{@rep{XXX}}}
-(with mandatory enclosing brackets),
+(with mandatory enclosing braces),
 where @rep{XXX} is a sequence of one or more hexadecimal digits
 representing the character code point.
 This code point can be any value less than @M{2@sp{31}}.
@@ -1084,8 +1151,11 @@ if its value fits in an integer or it is a hexadecimal constant,
 it denotes an integer;
 otherwise (that is, a decimal integer numeral that overflows),
 it denotes a float.
-(Hexadecimal integer numerals that overflow @emph{wrap around};
-they always denote an integer value.)
+Hexadecimal numerals with neither a radix point nor an exponent
+always denote an integer value;
+if the value overflows, it @emph{wraps around}
+to fit into a valid integer.
+
 Examples of valid integer constants are
 @verbatim{
 3   345   0xff   0xBEBADA
@@ -1150,11 +1220,15 @@ the variable @id{_ENV} itself is never global @see{globalenv}.
 
 @sect2{stats| @title{Statements}
 
+@simplesect{
+
 Lua supports an almost conventional set of @x{statements},
 similar to those in other conventional languages.
 This set includes
 blocks, assignments, control structures, function calls,
 and variable declarations.
+
+}
 
 @sect3{@title{Blocks}
 
@@ -1224,7 +1298,7 @@ As such, chunks can define local variables,
 receive arguments, and return values.
 Moreover, such anonymous function is compiled as in the
 scope of an external local variable called @id{_ENV} @see{globalenv}.
-The resulting function always has @id{_ENV} as its only upvalue,
+The resulting function always has @id{_ENV} as its only external variable,
 even if it does not use that variable.
 
 A chunk can be stored in a file or in a string inside the host program.
@@ -1392,30 +1466,37 @@ It has the following syntax:
   exp @bnfter{,} exp @bnfopt{@bnfter{,} exp} @Rw{do} block @Rw{end}}
 }
 The given identifier (@bnfNter{Name}) defines the control variable,
-which is local to the loop body (@emph{block}).
+which is a new variable local to the loop body (@emph{block}).
 
-The loop starts by evaluating once the three control expressions;
-they must all result in numbers.
+The loop starts by evaluating once the three control expressions.
 Their values are called respectively
 the @emph{initial value}, the @emph{limit}, and the @emph{step}.
 If the step is absent, it defaults @N{to 1}.
-Then the loop body is repeated with the value of the control variable
+
+If both the initial value and the step are integers,
+the loop is done with integers;
+note that the limit may not be an integer.
+Otherwise, the three values are converted to
+floats and the loop is done with floats.
+Beware of floating-point accuracy in this case.
+
+After that initialization,
+the loop body is repeated with the value of the control variable
 going through an arithmetic progression,
 starting at the initial value,
-with a common difference given by the step,
-until that value passes the limit.
+with a common difference given by the step.
 A negative step makes a decreasing sequence;
 a step equal to zero raises an error.
+The loop continues while the value is less than
+or equal to the limit
+(greater than or equal to for a negative step).
 If the initial value is already greater than the limit
 (or less than, if the step is negative),
 the body is not executed.
 
-If both the initial value and the step are integers,
-the loop is done with integers;
-in this case, the range of the control variable is clipped
-by the range of integers.
-Otherwise, the loop is done with floats.
-(Beware of floating-point accuracy in this case.)
+For integer loops,
+the control variable never wraps around;
+instead, the loop ends in case of an overflow.
 
 You should not change the value of the control variable
 during the loop.
@@ -1488,13 +1569,27 @@ Function calls are explained in @See{functioncall}.
 
 @sect3{localvar| @title{Local Declarations}
 @x{Local variables} can be declared anywhere inside a block.
-The declaration can include an initial assignment:
+The declaration can include an initialization:
 @Produc{
-@producname{stat}@producbody{@Rw{local} namelist @bnfopt{@bnfter{=} explist}}
+@producname{stat}@producbody{@Rw{local} attnamelist @bnfopt{@bnfter{=} explist}}
+@producname{attnamelist}@producbody{
+  @bnfNter{Name} attrib @bnfrep{@bnfter{,} @bnfNter{Name} attrib}}
 }
 If present, an initial assignment has the same semantics
 of a multiple assignment @see{assignment}.
 Otherwise, all variables are initialized with @nil.
+
+Each variable name may be postfixed by an attribute
+(a name between angle brackets):
+@Produc{
+@producname{attrib}@producbody{@bnfopt{@bnfter{<} @bnfNter{Name} @bnfter{>}}}
+}
+There are two possible attributes:
+@id{const}, which declares a @x{constant variable},
+that is, a variable that cannot be assigned to
+after its initialization;
+and @id{close}, which declares a to-be-closed variable @see{to-be-closed}.
+A list of variables can contain at most one to-be-closed variable.
 
 A chunk is also a block @see{chunks},
 and so local variables can be declared in a chunk outside any explicit block.
@@ -1505,13 +1600,7 @@ The visibility rules for local variables are explained in @See{visibility}.
 
 @sect3{to-be-closed| @title{To-be-closed Variables}
 
-A local variable can be declared as a @def{to-be-closed} variable,
-with the following syntax:
-@Produc{
-@producname{stat}@producbody{
-  @Rw{local} @bnfter{*} @bnfter{toclose} Name @bnfter{=} exp
-}}
-A to-be-closed variable behaves like a normal local variable,
+A to-be-closed variable behaves like a constant local variable,
 except that its value is @emph{closed} whenever the variable
 goes out of scope, including normal block termination,
 exiting its block by @Rw{break}/@Rw{goto}/@Rw{return},
@@ -1519,34 +1608,46 @@ or exiting by an error.
 
 Here, to @emph{close} a value means
 to call its @idx{__close} metamethod.
-If the value is @nil, it is ignored;
-otherwise,
-if it does not have a @idx{__close} metamethod,
-an error is raised.
 When calling the metamethod,
 the value itself is passed as the first argument
-and the error object (if any) is passed as a second argument;
+and the error object that caused the exit (if any)
+is passed as a second argument;
 if there was no error, the second argument is @nil.
+
+The value assigned to a to-be-closed variable
+must have a @idx{__close} metamethod
+or be a false value.
+(@nil and @false are ignored as to-be-closed values.)
 
 If several to-be-closed variables go out of scope at the same event,
 they are closed in the reverse order that they were declared.
+
 If there is any error while running a closing method,
 that error is handled like an error in the regular code
-where the variable was defined;
-in particular,
-the other pending closing methods will still be called.
+where the variable was defined.
+However, Lua may call the method one more time.
 
-If a coroutine yields inside a block and is never resumed again,
-the variables visible at that block will never go out of scope,
-and therefore they will not be closed.
+After an error,
+the other pending closing methods will still be called.
+Errors in these methods
+interrupt the respective method and generate a warning,
+but are otherwise ignored;
+the error reported is only the original one.
+
+If a coroutine yields and is never resumed again,
+some variables may never go out of scope,
+and therefore they will never be closed.
+(These variables are the ones created inside the coroutine
+and in scope at the point where the coroutine yielded.)
 Similarly, if a coroutine ends with an error,
 it does not unwind its stack,
 so it does not close any variable.
-You should either use finalizers
-or call @Lid{coroutine.kill} to close the variables in these cases.
-However, note that if the coroutine was created
+In both cases,
+you can either use finalizers
+or call @Lid{coroutine.close} to close the variables.
+However, if the coroutine was created
 through @Lid{coroutine.wrap},
-then its corresponding function will close all variables
+then its corresponding function will close the coroutine
 in case of errors.
 
 }
@@ -1554,6 +1655,8 @@ in case of errors.
 }
 
 @sect2{expressions| @title{Expressions}
+
+@simplesect{
 
 The basic expressions in Lua are the following:
 @Produc{
@@ -1629,6 +1732,7 @@ even if @id{f} returns several values.
 (The value of @T{(f(x,y,z))} is the first value returned by @id{f}
 or @nil if @id{f} does not return any values.)
 
+}
 
 
 @sect3{arith| @title{Arithmetic Operators}
@@ -1671,12 +1775,7 @@ Modulo is defined as the remainder of a division
 that rounds the quotient towards minus infinity (floor division).
 
 In case of overflows in integer arithmetic,
-all operations @emphx{wrap around},
-according to the usual rules of two-complement arithmetic.
-(In other words,
-they return the unique representable integer
-that is equal modulo @M{2@sp{n}} to the mathematical result,
-where @M{n} is the number of bits of the integer type.)
+all operations @emphx{wrap around}.
 }
 
 @sect3{bitwise| @title{Bitwise Operators}
@@ -1732,9 +1831,24 @@ If it does, that representation is the result.
 Otherwise, the conversion fails.
 
 Several places in Lua coerce strings to numbers when necessary.
+In particular,
+the string library sets metamethods that try to coerce
+strings to numbers in all arithmetic operations.
+If the conversion fails,
+the library calls the metamethod of the other operand
+(if present) or it raises an error.
+Note that bitwise operators do not do this coercion.
+
+Nonetheless, it is always a good practice not to rely on these
+implicit coercions, as they are not always applied;
+in particular, @T{"1"==1} is false and @T{"1"<1} raises an error
+@see{rel-ops}.
+These coercions exist mainly for compatibility and may be removed
+in future versions of the language.
+
 A string is converted to an integer or a float
 following its syntax and the rules of the Lua lexer.
-(The string may have also leading and trailing spaces and a sign.)
+The string may have also leading and trailing whitespaces and a sign.
 All conversions from strings to numbers
 accept both a dot and the current locale mark
 as the radix character.
@@ -1742,14 +1856,8 @@ as the radix character.
 If the string is not a valid numeral,
 the conversion fails.
 If necessary, the result of this first step is then converted
-to the required number subtype following the previous rules
+to a specific number subtype following the previous rules
 for conversions between floats and integers.
-
-The string library uses metamethods that try to coerce
-strings to numbers in all arithmetic operations.
-If the conversion fails,
-the library calls the metamethod of the other operand
-(if present) or it raises an error.
 
 The conversion from numbers to strings uses a
 non-specified human-readable format.
@@ -2147,7 +2255,7 @@ function r() return 1,2,3 end
 Then, we have the following mapping from arguments to parameters and
 to the vararg expression:
 @verbatim{
-CALL            PARAMETERS
+CALL             PARAMETERS
 
 f(3)             a=3, b=nil
 f(3, 4)          a=3, b=4
@@ -2217,8 +2325,8 @@ and so the second @id{x} refers to the outside variable.
 Because of the @x{lexical scoping} rules,
 local variables can be freely accessed by functions
 defined inside their scope.
-A local variable used by an inner function is called
-an @def{upvalue}, or @emphx{external local variable},
+A local variable used by an inner function is called an @def{upvalue}
+(or @emphx{external local variable}, or simply @emphx{external variable})
 inside the inner function.
 
 Notice that each execution of a @Rw{local} statement
@@ -2227,9 +2335,9 @@ Consider the following example:
 @verbatim{
 a = {}
 local x = 20
-for i=1,10 do
+for i = 1, 10 do
   local y = 0
-  a[i] = function () y=y+1; return x+y end
+  a[i] = function () y = y + 1; return x + y end
 end
 }
 The loop creates ten closures
@@ -2244,6 +2352,8 @@ while all of them share the same @id{x}.
 
 @C{-------------------------------------------------------------------------}
 @sect1{API| @title{The Application Program Interface}
+
+@simplesect{
 
 @index{C API}
 This section describes the @N{C API} for Lua, that is,
@@ -2281,8 +2391,12 @@ every function in the library, except to @Lid{lua_newstate},
 which creates a Lua state from scratch and returns a pointer
 to the @emph{main thread} in the new state.
 
+}
+
 
 @sect2{@title{The Stack}
+
+@simplesect{
 
 Lua uses a @emph{virtual stack} to pass values to and from C.
 Each element in this stack represents a Lua value
@@ -2316,32 +2430,37 @@ and index @M{-n} represents the first element.
 
 }
 
-@sect2{stacksize| @title{Stack Size}
+@sect3{stacksize| @title{Stack Size}
 
 When you interact with the Lua API,
 you are responsible for ensuring consistency.
 In particular,
 @emph{you are responsible for controlling stack overflow}.
-You can use the function @Lid{lua_checkstack}
-to ensure that the stack has enough space for pushing new elements.
+When you call any API function,
+you must ensure the stack has enough room to accommodate the results.
+
+There is one exception to the above rule:
+When you call a Lua function
+without a fixed number of results @seeF{lua_call},
+Lua ensures that the stack has enough space for all results.
+However, it does not ensure any extra space.
+So, before pushing anything on the stack after such a call
+you should use @Lid{lua_checkstack}.
 
 Whenever Lua calls C,
 it ensures that the stack has space for
-at least @defid{LUA_MINSTACK} extra slots.
+at least @defid{LUA_MINSTACK} extra elements;
+that is, you can safely push up to @id{LUA_MINSTACK} values into it.
 @id{LUA_MINSTACK} is defined as 20,
 so that usually you do not have to worry about stack space
 unless your code has loops pushing elements onto the stack.
-
-When you call a Lua function
-without a fixed number of results @seeF{lua_call},
-Lua ensures that the stack has enough space for all results,
-but it does not ensure any extra space.
-So, before pushing anything in the stack after such a call
-you should use @Lid{lua_checkstack}.
+Whenever necessary,
+you can use the function @Lid{lua_checkstack}
+to ensure that the stack has enough space for pushing new elements.
 
 }
 
-@sect2{@title{Valid and Acceptable Indices}
+@sect3{@title{Valid and Acceptable Indices}
 
 Any function in the API that receives stack indices
 works only with @emphx{valid indices} or @emphx{acceptable indices}.
@@ -2380,6 +2499,42 @@ For functions that can be called with acceptable indices,
 any non-valid index is treated as if it
 contains a value of a virtual type @defid{LUA_TNONE},
 which behaves like a nil value.
+
+}
+
+@sect3{constchar|@title{Pointers to strings}
+
+Several functions in the API return pointers (@T{const char*})
+to Lua strings in the stack.
+(See @Lid{lua_pushfstring}, @Lid{lua_pushlstring},
+@Lid{lua_pushstring}, and @Lid{lua_tolstring}.
+See also @Lid{luaL_checklstring}, @Lid{luaL_checkstring},
+and @Lid{luaL_tolstring} in the auxiliary library.)
+
+In general,
+Lua's garbage collection can free or move internal memory
+and then invalidate pointers to internal strings.
+To allow a safe use of these pointers,
+The API guarantees that any pointer to a string in a stack index
+is valid while the string value at that index is not removed from the stack.
+(It can be moved to another index, though.)
+When the index is a pseudo-index (referring to an upvalue),
+the pointer is valid while the corresponding call is active and
+the corresponding upvalue is not modified.
+
+Some functions in the debug interface
+also return pointers to strings,
+namely @Lid{lua_getlocal}, @Lid{lua_getupvalue},
+@Lid{lua_setlocal}, and @Lid{lua_setupvalue}.
+For these functions, the pointer is guaranteed to
+be valid while the caller function is active and
+the given closure (if one was given) is in the stack.
+
+Except for these guarantees,
+the garbage collector is free to invalidate
+any pointer to internal strings.
+
+}
 
 }
 
@@ -2454,6 +2609,8 @@ the @x{global environment}.
 
 @sect2{C-error|@title{Error Handling in C}
 
+@simplesect{
+
 Internally, Lua uses the C @id{longjmp} facility to handle errors.
 (Lua will use exceptions if you compile it as C++;
 search for @id{LUAI_THROW} in the source code for details.)
@@ -2504,6 +2661,38 @@ the panic function must first check the available space @see{stacksize}.
 
 }
 
+
+@sect3{statuscodes|@title{Status Codes}
+
+Several functions that report errors in the API use the following
+status codes to indicate different kinds of errors or other conditions:
+@description{
+
+@item{@defid{LUA_OK} (0)| no errors.}
+
+@item{@defid{LUA_ERRRUN}| a runtime error.}
+
+@item{@defid{LUA_ERRMEM}|
+@x{memory allocation error}.
+For such errors, Lua does not call the @x{message handler}.
+}
+
+@item{@defid{LUA_ERRERR}| error while running the @x{message handler}.}
+
+@item{@defid{LUA_ERRSYNTAX}| syntax error during precompilation.}
+
+@item{@defid{LUA_YIELD}| the thread (coroutine) yields.}
+
+@item{@defid{LUA_ERRFILE}| a file-related error;
+e.g., it cannot open or read the file.}
+
+}
+These constants are defined in the header file @id{lua.h}.
+
+}
+
+}
+
 @sect2{continuations|@title{Handling Yields in C}
 
 Internally, Lua uses the C @id{longjmp} facility to yield a coroutine.
@@ -2511,7 +2700,7 @@ Therefore, if a @N{C function} @id{foo} calls an API function
 and this API function yields
 (directly or indirectly by calling another function that yields),
 Lua cannot return to @id{foo} any more,
-because the @id{longjmp} removes its frame from the C stack.
+because the @id{longjmp} removes its frame from the @N{C stack}.
 
 To avoid this kind of problem,
 Lua raises an error whenever it tries to yield across an API call,
@@ -2535,7 +2724,7 @@ After the thread resumes,
 it eventually will finish running the callee function.
 However,
 the callee function cannot return to the original function,
-because its frame in the C stack was destroyed by the yield.
+because its frame in the @N{C stack} was destroyed by the yield.
 Instead, Lua calls a @def{continuation function},
 which was given as an argument to the callee function.
 As the name implies,
@@ -2641,7 +2830,7 @@ depending on the situation;
 an interrogation mark @Char{?} means that
 we cannot know how many elements the function pops/pushes
 by looking only at its arguments.
-(For instance, they may depend on what is on the stack.)
+(For instance, they may depend on what is in the stack.)
 The third field, @T{x},
 tells whether the function may raise errors:
 @Char{-} means the function never raises any error;
@@ -2657,7 +2846,7 @@ and therefore may raise any errors.
 
 Converts the @x{acceptable index} @id{idx}
 into an equivalent @x{absolute index}
-(that is, one that does not depend on the stack top).
+(that is, one that does not depend on the stack size).
 
 }
 
@@ -2767,9 +2956,13 @@ Sets a new panic function and returns the old one @see{C-error}.
 @apii{nargs+1,nresults,e}
 
 Calls a function.
+Like regular Lua calls,
+@id{lua_call} respects the @idx{__call} metamethod.
+So, here the word @Q{function}
+means any callable value.
 
 To do a call you must use the following protocol:
-first, the value to be called is pushed onto the stack;
+first, the function to be called is pushed onto the stack;
 then, the arguments to the call are pushed
 in direct order;
 that is, the first argument is pushed first.
@@ -2777,7 +2970,7 @@ Finally you call @Lid{lua_call};
 @id{nargs} is the number of arguments that you pushed onto the stack.
 When the function returns,
 all arguments and the function value are popped
-and the function results are pushed onto the stack.
+and the call results are pushed onto the stack.
 The number of results is adjusted to @id{nresults},
 unless @id{nresults} is @defid{LUA_MULTRET}.
 In this case, all results from the function are pushed;
@@ -2789,8 +2982,6 @@ so that after the call the last result is on the top of the stack.
 
 Any error while calling and running the function is propagated upwards
 (with a @id{longjmp}).
-Like regular Lua calls,
-this function respects the @idx{__call} metamethod.
 
 The following example shows how the host program can do the
 equivalent to this Lua code:
@@ -2876,7 +3067,7 @@ static int foo (lua_State *L) {
 @APIEntry{int lua_checkstack (lua_State *L, int n);|
 @apii{0,0,-}
 
-Ensures that the stack has space for at least @id{n} extra slots,
+Ensures that the stack has space for at least @id{n} extra elements,
 that is, that you can safely push up to @id{n} values into it.
 It returns false if it cannot fulfill the request,
 either because it would cause the stack
@@ -2884,7 +3075,7 @@ to be greater than a fixed maximum size
 (typically at least several thousand elements) or
 because it cannot allocate memory for the extra space.
 This function never shrinks the stack;
-if the stack already has space for the extra slots,
+if the stack already has space for the extra elements,
 it is left unchanged.
 
 }
@@ -2892,8 +3083,9 @@ it is left unchanged.
 @APIEntry{void lua_close (lua_State *L);|
 @apii{0,0,-}
 
-Destroys all objects in the given Lua state
-(calling the corresponding garbage-collection metamethods, if any)
+Close all active to-be-closed variables in the main thread,
+release all objects in the given Lua state
+(calling the corresponding garbage-collection metamethods, if any),
 and frees all dynamic memory used by this state.
 
 On several platforms, you may not need to call this function,
@@ -2996,7 +3188,7 @@ This function does not pop the Lua function from the stack.
 @APIEntry{int lua_error (lua_State *L);|
 @apii{1,0,v}
 
-Generates a Lua error,
+Raises a Lua error,
 using the value on the top of the stack as the error object.
 This function does a long jump,
 and therefore never returns
@@ -3004,55 +3196,58 @@ and therefore never returns
 
 }
 
-@APIEntry{int lua_gc (lua_State *L, int what, int data);|
+@APIEntry{int lua_gc (lua_State *L, int what, ...);|
 @apii{0,0,-}
 
 Controls the garbage collector.
 
 This function performs several tasks,
-according to the value of the parameter @id{what}:
+according to the value of the parameter @id{what}.
+For options that need extra arguments,
+they are listed after the option.
 @description{
 
+@item{@id{LUA_GCCOLLECT}|
+Performs a full garbage-collection cycle.
+}
+
 @item{@id{LUA_GCSTOP}|
-stops the garbage collector.
+Stops the garbage collector.
 }
 
 @item{@id{LUA_GCRESTART}|
-restarts the garbage collector.
-}
-
-@item{@id{LUA_GCCOLLECT}|
-performs a full garbage-collection cycle.
+Restarts the garbage collector.
 }
 
 @item{@id{LUA_GCCOUNT}|
-returns the current amount of memory (in Kbytes) in use by Lua.
+Returns the current amount of memory (in Kbytes) in use by Lua.
 }
 
 @item{@id{LUA_GCCOUNTB}|
-returns the remainder of dividing the current amount of bytes of
+Returns the remainder of dividing the current amount of bytes of
 memory in use by Lua by 1024.
 }
 
-@item{@id{LUA_GCSTEP}|
-performs an incremental step of garbage collection.
-}
-
-@item{@id{LUA_GCSETPAUSE}|
-sets @id{data} as the new value
-for the @emph{pause} of the collector @see{GC}
-and returns the previous value of the pause.
-}
-
-@item{@id{LUA_GCSETSTEPMUL}|
-sets @id{data} as the new value for the @emph{step multiplier} of
-the collector @see{GC}
-and returns the previous value of the step multiplier.
+@item{@id{LUA_GCSTEP} @T{(int stepsize)}|
+Performs an incremental step of garbage collection,
+corresponding to the allocation of @id{stepsize} Kbytes.
 }
 
 @item{@id{LUA_GCISRUNNING}|
-returns a boolean that tells whether the collector is running
+Returns a boolean that tells whether the collector is running
 (i.e., not stopped).
+}
+
+@item{@id{LUA_GCINC} (int pause, int stepmul, stepsize)|
+Changes the collector to incremental mode
+with the given parameters @see{incmode}.
+Returns the previous mode (@id{LUA_GCGEN} or @id{LUA_GCINC}).
+}
+
+@item{@id{LUA_GCGEN} (int minormul, int majormul)|
+Changes the collector to generational mode
+with the given parameters @see{genmode}.
+Returns the previous mode (@id{LUA_GCGEN} or @id{LUA_GCINC}).
 }
 
 }
@@ -3351,19 +3546,6 @@ If there are no errors,
 function on top of the stack.
 Otherwise, it pushes an error message.
 
-The return values of @id{lua_load} are:
-@description{
-
-@item{@Lid{LUA_OK}| no errors;}
-
-@item{@defid{LUA_ERRSYNTAX}|
-syntax error during precompilation;}
-
-@item{@Lid{LUA_ERRMEM}|
-@x{memory allocation (out-of-memory) error};}
-
-}
-
 The @id{lua_load} function uses a user-supplied @id{reader} function
 to read the chunk @seeC{lua_Reader}.
 The @id{data} argument is an opaque value passed to the reader function.
@@ -3380,6 +3562,11 @@ a @id{NULL} value is equivalent to the string @St{bt}.
 @id{lua_load} uses the stack internally,
 so the reader function must always leave the stack
 unmodified when returning.
+
+@id{lua_load} can return
+@Lid{LUA_OK}, @Lid{LUA_ERRSYNTAX}, or @Lid{LUA_ERRMEM}.
+The function may also return other values corresponding to
+errors raised by the read function @see{statuscodes}.
 
 If the resulting function has upvalues,
 its first upvalue is set to the value of the @x{global environment}
@@ -3421,7 +3608,6 @@ The new thread returned by this function shares with the original thread
 its global environment,
 but has an independent execution stack.
 
-There is no explicit function to close or to destroy a thread.
 Threads are subject to garbage collection,
 like any Lua object.
 
@@ -3437,6 +3623,10 @@ plus an associated block of raw memory with @id{size} bytes.
 @Lid{lua_setiuservalue} and @Lid{lua_getiuservalue}.)
 
 The function returns the address of the block of memory.
+Lua ensures that this address is valid as long as
+the corresponding userdata is alive @see{GC}.
+Moreover, if the userdata is marked for finalization @see{finalizers},
+its address is valid at least until the call to its finalizer.
 
 }
 
@@ -3535,27 +3725,8 @@ information to the error object, such as a stack traceback.
 Such information cannot be gathered after the return of @Lid{lua_pcall},
 since by then the stack has unwound.
 
-The @Lid{lua_pcall} function returns one of the following constants
-(defined in @id{lua.h}):
-@description{
-
-@item{@defid{LUA_OK} (0)|
-success.}
-
-@item{@defid{LUA_ERRRUN}|
-a runtime error.
-}
-
-@item{@defid{LUA_ERRMEM}|
-@x{memory allocation error}.
-For such errors, Lua does not call the @x{message handler}.
-}
-
-@item{@defid{LUA_ERRERR}|
-error while running the @x{message handler}.
-}
-
-}
+The @Lid{lua_pcall} function returns one of the following status codes:
+@Lid{LUA_OK}, @Lid{LUA_ERRRUN}, @Lid{LUA_ERRMEM}, or @Lid{LUA_ERRERR}.
 
 }
 
@@ -3569,14 +3740,17 @@ int lua_pcallk (lua_State *L,
 @apii{nargs + 1,nresults|1,-}
 
 This function behaves exactly like @Lid{lua_pcall},
-but allows the called function to yield @see{continuations}.
+except that it allows the called function to yield @see{continuations}.
 
 }
 
 @APIEntry{void lua_pop (lua_State *L, int n);|
-@apii{n,0,-}
+@apii{n,0,e}
 
 Pops @id{n} elements from the stack.
+
+This function can run arbitrary code when removing an index
+marked as to-be-closed from the stack.
 
 }
 
@@ -3636,7 +3810,7 @@ This function is equivalent to @Lid{lua_pushcclosure} with no upvalues.
 @apii{0,1,v}
 
 Pushes onto the stack a formatted string
-and returns a pointer to this string.
+and returns a pointer to this string @see{constchar}.
 It is similar to the @ANSI{sprintf},
 but has two important differences.
 First,
@@ -3710,7 +3884,7 @@ the function returns.
 The string can contain any binary data,
 including @x{embedded zeros}.
 
-Returns a pointer to the internal copy of the string.
+Returns a pointer to the internal copy of the string @see{constchar}.
 
 }
 
@@ -3737,7 +3911,7 @@ Lua will make or reuse an internal copy of the given string,
 so the memory at @id{s} can be freed or reused immediately after
 the function returns.
 
-Returns a pointer to the internal copy of the string.
+Returns a pointer to the internal copy of the string @see{constchar}.
 
 If @id{s} is @id{NULL}, pushes @nil and returns @id{NULL}.
 
@@ -3795,7 +3969,7 @@ Similar to @Lid{lua_gettable}, but does a raw access
 Pushes onto the stack the value @T{t[n]},
 where @id{t} is the table at the given index.
 The access is raw,
-that is, it does not invoke the @idx{__index} metamethod.
+that is, it does not use the @idx{__index} metavalue.
 
 Returns the type of the pushed value.
 
@@ -3808,7 +3982,7 @@ Pushes onto the stack the value @T{t[k]},
 where @id{t} is the table at the given index and
 @id{k} is the pointer @id{p} represented as a light userdata.
 The access is raw;
-that is, it does not invoke the @idx{__index} metamethod.
+that is, it does not use the @idx{__index} metavalue.
 
 Returns the type of the pushed value.
 
@@ -3844,7 +4018,7 @@ and @id{v} is the value on the top of the stack.
 
 This function pops the value from the stack.
 The assignment is raw,
-that is, it does not invoke the @idx{__newindex} metamethod.
+that is, it does not use the @idx{__newindex} metavalue.
 
 }
 
@@ -3858,7 +4032,7 @@ and @id{v} is the value on the top of the stack.
 
 This function pops the value from the stack.
 The assignment is raw,
-that is, it does not invoke @idx{__newindex} metamethod.
+that is, it does not use the @idx{__newindex} metavalue.
 
 }
 
@@ -3922,7 +4096,7 @@ Returns a status code:
 @Lid{LUA_OK} for no errors in closing methods,
 or an error status otherwise.
 In case of error,
-leave the error object on the stack,
+leaves the error object on the top of the stack,
 
 }
 
@@ -3933,7 +4107,8 @@ leave the error object on the stack,
 Starts and resumes a coroutine in the given thread @id{L}.
 
 To start a coroutine,
-you push onto the thread stack the main function plus any arguments;
+you push the main function plus any arguments
+onto the empty stack of the thread.
 then you call @Lid{lua_resume},
 with @id{nargs} being the number of arguments.
 This call returns when the coroutine suspends or finishes its execution.
@@ -3946,12 +4121,13 @@ or returned by the body function.
 @Lid{LUA_YIELD} if the coroutine yields,
 @Lid{LUA_OK} if the coroutine finishes its execution
 without errors,
-or an error code in case of errors @seeC{lua_pcall}.
+or an error code in case of errors @see{statuscodes}.
 In case of errors,
 the error object is on the top of the stack.
 
-To resume a coroutine, you clear its stack,
-push only the values to be passed as results from @id{yield},
+To resume a coroutine,
+you remove the @id{*nresults} yielded values from its stack,
+push the values to be passed as results from @id{yield},
 and then call @Lid{lua_resume}.
 
 The parameter @id{from} represents the coroutine that is resuming @id{L}.
@@ -4028,11 +4204,15 @@ Returns 0 if the userdata does not have that value.
 
 }
 
-@APIEntry{void lua_setmetatable (lua_State *L, int index);|
+@APIEntry{int lua_setmetatable (lua_State *L, int index);|
 @apii{1,0,-}
 
-Pops a table from the stack and
-sets it as the new metatable for the value at the given index.
+Pops a table or @nil from the stack and
+sets that value as the new metatable for the value at the given index.
+(@nil means no metatable.)
+
+(For historical reasons, this function returns an @id{int},
+which now is always 1.)
 
 }
 
@@ -4051,13 +4231,16 @@ for the @Q{newindex} event @see{metatable}.
 }
 
 @APIEntry{void lua_settop (lua_State *L, int index);|
-@apii{?,?,-}
+@apii{?,?,e}
 
 Accepts any index, @N{or 0},
 and sets the stack top to this index.
 If the new top is greater than the old one,
 then the new elements are filled with @nil.
 If @id{index} @N{is 0}, then all stack elements are removed.
+
+This function can run arbitrary code when removing an index
+marked as to-be-closed from the stack.
 
 }
 
@@ -4093,7 +4276,7 @@ Returns the status of the thread @id{L}.
 The status can be @Lid{LUA_OK} for a normal thread,
 an error code if the thread finished the execution
 of a @Lid{lua_resume} with an error,
-or @defid{LUA_YIELD} if the thread is suspended.
+or @Lid{LUA_YIELD} if the thread is suspended.
 
 You can call functions only in threads with status @Lid{LUA_OK}.
 You can resume threads with status @Lid{LUA_OK}
@@ -4111,7 +4294,7 @@ and returns the total size of the string,
 that is, its length plus one.
 The conversion can result in an integer or a float,
 according to the lexical conventions of Lua @see{lexical}.
-The string may have leading and trailing spaces and a sign.
+The string may have leading and trailing whitespaces and a sign.
 If the string is not a valid numeral,
 returns 0 and pushes nothing.
 (Note that the result can be used as a boolean,
@@ -4143,7 +4326,7 @@ otherwise, returns @id{NULL}.
 }
 
 @APIEntry{void lua_toclose (lua_State *L, int index);|
-@apii{0,0,v}
+@apii{0,0,m}
 
 Marks the given index in the stack as a
 to-be-closed @Q{variable} @see{to-be-closed}.
@@ -4159,11 +4342,17 @@ An index marked as to-be-closed should not be removed from the stack
 by any other function in the API except @Lid{lua_settop} or @Lid{lua_pop}.
 
 This function should not be called for an index
-that is equal to or below an already marked to-be-closed index.
+that is equal to or below an active to-be-closed index.
 
-This function can raise an out-of-memory error.
-In that case, the value in the given index is immediately closed,
+In the case of an out-of-memory error,
+the value in the given index is immediately closed,
 as if it was already marked.
+
+Note that, both in case of errors and of a regular return,
+by the time the @idx{__close} metamethod runs,
+the @N{C stack} was already unwound,
+so that any automatic @N{C variable} declared in the calling function
+will be out of scope.
 
 }
 
@@ -4204,14 +4393,10 @@ then @id{lua_tolstring} also
 when @id{lua_tolstring} is applied to keys during a table traversal.)
 
 @id{lua_tolstring} returns a pointer
-to a string inside the Lua state.
+to a string inside the Lua state @see{constchar}.
 This string always has a zero (@Char{\0})
 after its last character (as @N{in C}),
 but can contain other zeros in its body.
-
-Because Lua has garbage collection,
-there is no guarantee that the pointer returned by @id{lua_tolstring}
-will be valid after the corresponding Lua value is removed from the stack.
 
 }
 
@@ -4340,6 +4525,8 @@ The third parameter is a boolean that
 indicates whether the message is
 to be continued by the message in the next call.
 
+See @Lid{warn} for more details about warnings.
+
 }
 
 @APIEntry{
@@ -4349,6 +4536,8 @@ void lua_warning (lua_State *L, const char *msg, int tocont);|
 Emits a warning with the given message.
 A message in a call with @id{tocont} true should be
 continued in another call to this function.
+
+See @Lid{warn} for more details about warnings.
 
 }
 
@@ -4495,7 +4684,7 @@ If @T{source} starts with a @Char{@At},
 it means that the function was defined in a file where
 the file name follows the @Char{@At}.
 If @T{source} starts with a @Char{=},
-the remainder of its contents describe the source in a user-dependent manner.
+the remainder of its contents describes the source in a user-dependent manner.
 Otherwise,
 the function was defined in a string where
 @T{source} is that string.
@@ -4570,7 +4759,7 @@ true if the function is a vararg function
 }
 
 @item{@id{ftransfer}|
-the index on the stack of the first value being @Q{transferred},
+the index in the stack of the first value being @Q{transferred},
 that is, parameters in a call or return values in a return.
 (The other values are in consecutive indices.)
 Using this index, you can access and modify these values
@@ -4722,7 +4911,7 @@ an identification of the @emph{activation record}
 of the function executing at a given level.
 @N{Level 0} is the current running function,
 whereas level @M{n+1} is the function that has called level @M{n}
-(except for tail calls, which do not count on the stack).
+(except for tail calls, which do not count in the stack).
 When called with a level greater than the stack depth,
 @Lid{lua_getstack} returns 0;
 otherwise it returns 1.
@@ -4739,11 +4928,7 @@ and returns its name.
 Returns @id{NULL} (and pushes nothing)
 when the index @id{n} is greater than the number of upvalues.
 
-For @N{C functions}, this function uses the empty string @T{""}
-as a name for all upvalues.
-(For Lua functions,
-upvalues are the external local variables that the function uses,
-and that are consequently included in its closure.)
+See @Lid{debug.getupvalue} for more information about upvalues.
 
 }
 
@@ -4799,8 +4984,7 @@ For each event, the hook is called as explained below:
 @description{
 
 @item{The call hook| is called when the interpreter calls a function.
-The hook is called just after Lua enters the new function,
-before the function gets its arguments.
+The hook is called just after Lua enters the new function.
 }
 
 @item{The return hook| is called when the interpreter returns from a function.
@@ -4890,7 +5074,9 @@ refer to the @id{n2}-th upvalue of the Lua closure at index @id{funcindex2}.
 
 
 @C{-------------------------------------------------------------------------}
-@sect1{@title{The Auxiliary Library}
+@sect1{auxlib|@title{The Auxiliary Library}
+
+@simplesect{
 
 @index{lauxlib.h}
 The @def{auxiliary library} provides several convenient functions
@@ -4926,6 +5112,9 @@ you should not use these functions for other stack values.
 Functions called @id{luaL_check*}
 always raise an error if the check is not satisfied.
 
+}
+
+
 @sect2{@title{Functions and Types}
 
 Here we list all functions and types from the auxiliary library
@@ -4945,10 +5134,9 @@ const void luaL_addgsub (luaL_Buffer *B, const char *s,
                          const char *p, const char *r);|
 @apii{0,0,m}
 
-Adds a copy of the string @id{s} to the buffer @id{B},
+Adds a copy of the string @id{s} to the buffer @id{B} @seeC{luaL_Buffer},
 replacing any occurrence of the string @id{p}
 with the string @id{r}.
-@seeC{luaL_Buffer}.
 
 }
 
@@ -4965,7 +5153,7 @@ The string can contain @x{embedded zeros}.
 @APIEntry{void luaL_addsize (luaL_Buffer *B, size_t n);|
 @apii{?,?,-}
 
-Adds to the buffer @id{B} @seeC{luaL_Buffer}
+Adds to the buffer @id{B}
 a string of length @id{n} previously copied to the
 buffer area @seeC{luaL_prepbuffer}.
 
@@ -5097,26 +5285,26 @@ plus the final string on its top.
 @APIEntry{char *luaL_buffaddr (luaL_Buffer *B);|
 @apii{0,0,-}
 
-Returns the address of the current contents of buffer @id{B}.
-Note that any addition to the buffer may invalidate this address.
+Returns the address of the current content of buffer @id{B}
 @seeC{luaL_Buffer}.
+Note that any addition to the buffer may invalidate this address.
 
 }
 
 @APIEntry{void luaL_buffinit (lua_State *L, luaL_Buffer *B);|
 @apii{0,0,-}
 
-Initializes a buffer @id{B}.
-This function does not allocate any space;
-the buffer must be declared as a variable
+Initializes a buffer @id{B}
 @seeC{luaL_Buffer}.
+This function does not allocate any space;
+the buffer must be declared as a variable.
 
 }
 
 @APIEntry{size_t luaL_bufflen (luaL_Buffer *B);|
 @apii{0,0,-}
 
-Returns the length of the current contents of buffer @id{B}.
+Returns the length of the current content of buffer @id{B}
 @seeC{luaL_Buffer}.
 
 }
@@ -5126,6 +5314,15 @@ Returns the length of the current contents of buffer @id{B}.
 
 Equivalent to the sequence
 @Lid{luaL_buffinit}, @Lid{luaL_prepbuffsize}.
+
+}
+
+@APIEntry{void luaL_buffsub (luaL_Buffer *B, int n);|
+@apii{0,0,-}
+
+Removes @id{n} bytes from the the buffer @id{B}
+@seeC{luaL_Buffer}.
+The buffer must have at least that many bytes.
 
 }
 
@@ -5260,8 +5457,8 @@ It is defined as the following macro:
 @verbatim{
 (luaL_loadfile(L, filename) || lua_pcall(L, 0, LUA_MULTRET, 0))
 }
-It returns false if there are no errors
-or true in case of errors.
+It returns @Lid{LUA_OK} if there are no errors,
+or an error code in case of errors @see{statuscodes}.
 
 }
 
@@ -5273,8 +5470,8 @@ It is defined as the following macro:
 @verbatim{
 (luaL_loadstring(L, str) || lua_pcall(L, 0, LUA_MULTRET, 0))
 }
-It returns false if there are no errors
-or true in case of errors.
+It returns @Lid{LUA_OK} if there are no errors,
+or an error code in case of errors @see{statuscodes}.
 
 }
 
@@ -5424,10 +5621,8 @@ The first line in the file is ignored if it starts with a @T{#}.
 
 The string @id{mode} works as in the function @Lid{lua_load}.
 
-This function returns the same results as @Lid{lua_load},
-but it has an extra error code @defid{LUA_ERRFILE}
-for file-related errors
-(e.g., it cannot open or read the file).
+This function returns the same results as @Lid{lua_load}
+or @Lid{LUA_ERRFILE} for file-related errors.
 
 As @Lid{lua_load}, this function only loads the chunk;
 it does not run it.
@@ -5489,7 +5684,6 @@ creates a new table to be used as a metatable for userdata,
 adds to this new table the pair @T{__name = tname},
 adds to the registry the pair @T{[tname] = new table},
 and returns 1.
-(The entry @idx{__name} is used by some error-reporting functions.)
 
 In both cases,
 the function pushes onto the stack the final value associated
@@ -5619,6 +5813,13 @@ it to the buffer.
 
 }
 
+@APIEntry{void luaL_pushfail (lua_State *L);|
+@apii{0,1,-}
+
+Pushes the @fail value onto the stack @see{libraries}.
+
+}
+
 @APIEntry{void luaL_pushresult (luaL_Buffer *B);|
 @apii{?,1,m}
 
@@ -5737,8 +5938,8 @@ The field @id{closef} points to a Lua function
 that will be called to close the stream
 when the handle is closed or collected;
 this function receives the file handle as its sole argument and
-must return either @true, in case of success,
-or @nil plus an error message, in case of error.
+must return either a true value, in case of success,
+or a false value plus an error message, in case of error.
 Once Lua calls this field,
 it changes the field value to @id{NULL}
 to signal that the handle is closed.
@@ -5760,7 +5961,7 @@ it returns @id{NULL} instead of raising an error.
 Converts any Lua value at the given index to a @N{C string}
 in a reasonable format.
 The resulting string is pushed onto the stack and also
-returned by the function.
+returned by the function @see{constchar}.
 If @id{len} is not @id{NULL},
 the function also sets @T{*len} with the string length.
 
@@ -5843,6 +6044,8 @@ This function is used to build a prefix for error messages.
 @C{-------------------------------------------------------------------------}
 @sect1{libraries| @title{The Standard Libraries}
 
+@simplesect{
+
 The standard Lua libraries provide useful functions
 that are implemented @N{in C} through the @N{C API}.
 Some of these functions provide essential services to the language
@@ -5859,6 +6062,14 @@ these library functions do not adjust its number of arguments
 to its expected parameters.
 For instance, a function documented as @T{foo(arg)}
 should not be called without an argument.
+
+The notation @fail means a false value representing
+some kind of failure.
+(Currently, @fail is equal to @nil,
+but that may change in future versions.
+The recommendation is to always test the success of these functions
+with @T{(not status)}, instead of @T{(status == nil)}.)
+
 
 Currently, Lua has the following standard libraries:
 @itemize{
@@ -5906,6 +6117,9 @@ the host program can open them individually by using
 and @defid{luaopen_debug} (for the debug library).
 These functions are declared in @defid{lualib.h}.
 
+}
+
+
 @sect2{predefined| @title{Basic Functions}
 
 The basic library provides core functions to Lua.
@@ -5916,7 +6130,7 @@ implementations for some of its facilities.
 
 @LibEntry{assert (v [, message])|
 
-Calls @Lid{error} if
+Raises an error if
 the value of its argument @id{v} is false (i.e., @nil or @false);
 otherwise, returns all its arguments.
 In case of error,
@@ -5932,42 +6146,41 @@ It performs different functions according to its first argument, @id{opt}:
 @description{
 
 @item{@St{collect}|
-performs a full garbage-collection cycle.
+Performs a full garbage-collection cycle.
 This is the default option.
 }
 
 @item{@St{stop}|
-stops automatic execution of the garbage collector.
+Stops automatic execution of the garbage collector.
 The collector will run only when explicitly invoked,
 until a call to restart it.
 }
 
 @item{@St{restart}|
-restarts automatic execution of the garbage collector.
+Restarts automatic execution of the garbage collector.
 }
 
 @item{@St{count}|
-returns the total memory in use by Lua in Kbytes.
+Returns the total memory in use by Lua in Kbytes.
 The value has a fractional part,
 so that it multiplied by 1024
 gives the exact number of bytes in use by Lua.
 }
 
 @item{@St{step}|
-performs a garbage-collection step.
+Performs a garbage-collection step.
 The step @Q{size} is controlled by @id{arg}.
 With a zero value,
 the collector will perform one basic (indivisible) step.
 For non-zero values,
 the collector will perform as if that amount of memory
-(in KBytes) had been allocated by Lua.
+(in Kbytes) had been allocated by Lua.
 Returns @true if the step finished a collection cycle.
 }
 
-@item{@St{setpause}|
-sets @id{arg} as the new value for the @emph{pause} of
-the collector @see{GC}.
-Returns the previous value for @emph{pause}.
+@item{@St{isrunning}|
+Returns a boolean that tells whether the collector is running
+(i.e., not stopped).
 }
 
 @item{@St{incremental}|
@@ -5975,7 +6188,7 @@ Change the collector mode to incremental.
 This option can be followed by three numbers:
 the garbage-collector pause,
 the step multiplier,
-and the step size.
+and the step size @see{incmode}.
 A zero means to not change that value.
 }
 
@@ -5983,13 +6196,8 @@ A zero means to not change that value.
 Change the collector mode to generational.
 This option can be followed by two numbers:
 the garbage-collector minor multiplier
-and the major multiplier.
+and the major multiplier @see{genmode}.
 A zero means to not change that value.
-}
-
-@item{@St{isrunning}|
-returns a boolean that tells whether the collector is running
-(i.e., not stopped).
 }
 
 }
@@ -5999,9 +6207,9 @@ and some of these options.
 }
 
 @LibEntry{dofile ([filename])|
-Opens the named file and executes its contents as a Lua chunk.
+Opens the named file and executes its content as a Lua chunk.
 When called without arguments,
-@id{dofile} executes the contents of the standard input (@id{stdin}).
+@id{dofile} executes the content of the standard input (@id{stdin}).
 Returns all values returned by the chunk.
 In case of errors, @id{dofile} propagates the error
 to its caller.
@@ -6010,8 +6218,7 @@ to its caller.
 }
 
 @LibEntry{error (message [, level])|
-Terminates the last protected function called
-and returns @id{message} as the error object.
+Raises an error @see{error} with @{message} as the error object.
 This function never returns.
 
 Usually, @id{error} adds some information about the error position
@@ -6070,8 +6277,8 @@ with previous results.
 A return of an empty string, @nil, or no value signals the end of the chunk.
 
 If there are no syntactic errors,
-returns the compiled chunk as a function;
-otherwise, returns @nil plus the error message.
+@id{load} returns the compiled chunk as a function;
+otherwise, it returns @fail plus the error message.
 
 When you load a main chunk,
 the resulting function will always have exactly one upvalue,
@@ -6104,9 +6311,11 @@ It may be the string @St{b} (only @x{binary chunk}s),
 or @St{bt} (both binary and text).
 The default is @St{bt}.
 
-Lua does not check the consistency of binary chunks.
-Maliciously crafted binary chunks can crash
-the interpreter.
+It is safe to load malformed binary chunks;
+@id{load} signals an appropriate error.
+However,
+Lua does not check the consistency of the code inside binary chunks;
+running maliciously crafted bytecode can crash the interpreter.
 
 }
 
@@ -6171,7 +6380,7 @@ the table during its traversal.
 @LibEntry{pcall (f [, arg1, @Cdots])|
 
 Calls the function @id{f} with
-the given arguments in @def{protected mode}.
+the given arguments in @emphx{protected mode}.
 This means that any error @N{inside @T{f}} is not propagated;
 instead, @id{pcall} catches the error
 and returns a status code.
@@ -6180,6 +6389,7 @@ which is true if the call succeeds without errors.
 In such case, @id{pcall} also returns all results from the call,
 after this first result.
 In case of any error, @id{pcall} returns @false plus the error object.
+Note that errors caught by @id{pcall} do not call a message handler.
 
 }
 
@@ -6206,7 +6416,7 @@ Returns a boolean.
 
 @LibEntry{rawget (table, index)|
 Gets the real value of @T{table[index]},
-without invoking the @idx{__index} metamethod.
+without using the @idx{__index} metavalue.
 @id{table} must be a table;
 @id{index} may be any value.
 
@@ -6222,7 +6432,7 @@ Returns an integer.
 
 @LibEntry{rawset (table, index, value)|
 Sets the real value of @T{table[index]} to @id{value},
-without invoking the @idx{__newindex} metamethod.
+without using the @idx{__newindex} metavalue.
 @id{table} must be a table,
 @id{index} any value different from @nil and @x{NaN},
 and @id{value} any Lua value.
@@ -6263,7 +6473,7 @@ When called with no @id{base},
 If the argument is already a number or
 a string convertible to a number,
 then @id{tonumber} returns this number;
-otherwise, it returns @nil.
+otherwise, it returns @fail.
 
 The conversion of strings can result in integers or floats,
 according to the lexical conventions of Lua @see{lexical}.
@@ -6277,24 +6487,30 @@ In bases @N{above 10}, the letter @Char{A} (in either upper or lower case)
 @N{represents 10}, @Char{B} @N{represents 11}, and so forth,
 with @Char{Z} representing 35.
 If the string @id{e} is not a valid numeral in the given base,
-the function returns @nil.
+the function returns @fail.
 
 }
 
 @LibEntry{tostring (v)|
+
 Receives a value of any type and
 converts it to a string in a human-readable format.
-(For complete control of how numbers are converted,
-use @Lid{string.format}.)
 
 If the metatable of @id{v} has a @idx{__tostring} field,
 then @id{tostring} calls the corresponding value
 with @id{v} as argument,
 and uses the result of the call as its result.
+Otherwise, if the metatable of @id{v} has a @idx{__name} field
+with a string value,
+@id{tostring} may use that string in its final result.
+
+For complete control of how numbers are converted,
+use @Lid{string.format}.
 
 }
 
 @LibEntry{type (v)|
+
 Returns the type of its only argument, coded as a string.
 The possible results of this function are
 @St{nil} (a string, not the value @nil),
@@ -6316,12 +6532,20 @@ The current value of this variable is @St{Lua 5.4}.
 
 }
 
-@LibEntry{warn (message [, tocont])|
+@LibEntry{warn (msg1, @Cdots)|
 
-Emits a warning with the given message.
-A message in a call with @id{tocont} true should be
-continued in another call to this function.
-The default for @id{tocont} is false.
+Emits a warning with a message composed by the concatenation
+of all its arguments (which should be strings).
+
+By convention,
+a one-piece message starting with @Char{@At}
+is intended to be a @emph{control message},
+which is a message to the warning system itself.
+In particular, the standard warning function in Lua
+recognizes the control messages @St{@At{}off},
+to stop the emission of warnings,
+and @St{@At{}on}, to (re)start the emission;
+it ignores unknown control messages.
 
 }
 
@@ -6341,6 +6565,19 @@ which come inside the table @defid{coroutine}.
 See @See{coroutine} for a general description of coroutines.
 
 
+@LibEntry{coroutine.close (co)|
+
+Closes coroutine @id{co},
+that is,
+closes all its pending to-be-closed variables
+and puts the coroutine in a dead state.
+The given coroutine must be dead or suspended.
+In case of error closing some variable,
+returns @false plus the error object;
+otherwise returns @true.
+
+}
+
 @LibEntry{coroutine.create (f)|
 
 Creates a new coroutine, with body @id{f}.
@@ -6357,17 +6594,6 @@ The default for @id{co} is the running coroutine.
 
 A coroutine is yieldable if it is not the main thread and
 it is not inside a non-yieldable @N{C function}.
-
-}
-
-@LibEntry{coroutine.kill (co)|
-
-Kills coroutine @id{co},
-closing all its pending to-be-closed variables
-and putting the coroutine in a dead state.
-In case of error closing some variable,
-returns @false plus the error object;
-otherwise returns @true.
 
 }
 
@@ -6403,7 +6629,8 @@ true when the running coroutine is the main one.
 
 Returns the status of the coroutine @id{co}, as a string:
 @T{"running"},
-if the coroutine is running (that is, it called @id{status});
+if the coroutine is running
+(that is, it is the one that called @id{status});
 @T{"suspended"}, if the coroutine is suspended in a call to @id{yield},
 or if it has not started running yet;
 @T{"normal"} if the coroutine is active but not running
@@ -6423,7 +6650,7 @@ extra arguments to @id{resume}.
 The function returns the same values returned by @id{resume},
 except the first boolean.
 In case of error,
-the function kills the coroutine and propagates the error.
+the function closes the coroutine and propagates the error.
 
 }
 
@@ -6532,7 +6759,8 @@ Default is @Char{-}.}
 
 @LibEntry{package.cpath|
 
-The path used by @Lid{require} to search for a @N{C loader}.
+A string with the path used by @Lid{require}
+to search for a @N{C loader}.
 
 Lua initializes the @N{C path} @Lid{package.cpath} in the same way
 it initializes the Lua path @Lid{package.path},
@@ -6585,11 +6813,22 @@ As such, it is only available on some platforms
 (Windows, Linux, Mac OS X, Solaris, BSD,
 plus other Unix systems that support the @id{dlfcn} standard).
 
+This function is inherently insecure,
+as it allows Lua to call any function in any readable dynamic
+library in the system.
+(Lua calls any function assuming the function
+has a proper prototype and respects a proper protocol
+@see{lua_CFunction}.
+Therefore,
+calling an arbitrary function in an arbitrary dynamic library
+more often than not results in an access violation.)
+
 }
 
 @LibEntry{package.path|
 
-The path used by @Lid{require} to search for a Lua loader.
+A string with the path used by @Lid{require}
+to search for a Lua loader.
 
 At start-up, Lua initializes this variable with
 the value of the environment variable @defid{LUA_PATH_5_4} or
@@ -6713,7 +6952,7 @@ will try to open the files
 
 Returns the resulting name of the first file that it can
 open in read mode (after closing the file),
-or @nil plus an error message if none succeeds.
+or @fail plus an error message if none succeeds.
 (This error message lists all file names it tried to open.)
 
 }
@@ -6721,6 +6960,8 @@ or @nil plus an error message if none succeeds.
 }
 
 @sect2{strlib| @title{String Manipulation}
+
+@simplesect{
 
 This library provides generic functions for string manipulation,
 such as finding and extracting substrings, and pattern matching.
@@ -6792,7 +7033,7 @@ Looks for the first match of
 @id{pattern} @see{pm} in the string @id{s}.
 If it finds a match, then @id{find} returns the indices @N{of @T{s}}
 where this occurrence starts and ends;
-otherwise, it returns @nil.
+otherwise, it returns @fail.
 A third, optional numeric argument @id{init} specifies
 where to start the search;
 its default value @N{is 1} and can be negative.
@@ -6800,7 +7041,6 @@ A value of @true as a fourth, optional argument @id{plain}
 turns off the pattern matching facilities,
 so the function does a plain @Q{find substring} operation,
 with no characters in @id{pattern} being considered magic.
-Note that if @id{plain} is given, then @id{init} must be given as well.
 
 If the pattern has captures,
 then in a successful match
@@ -6986,7 +7226,7 @@ Looks for the first @emph{match} of
 the @id{pattern} @see{pm} in the string @id{s}.
 If it finds one, then @id{match} returns
 the captures from the pattern;
-otherwise it returns @nil.
+otherwise it returns @fail.
 If @id{pattern} specifies no captures,
 then the whole match is returned.
 A third, optional numeric argument @id{init} specifies
@@ -7076,8 +7316,12 @@ The definition of what a lowercase letter is depends on the current locale.
 
 }
 
+}
+
 
 @sect3{pm| @title{Patterns}
+
+@simplesect{
 
 Patterns in Lua are described by regular strings,
 which are interpreted as patterns by the pattern-matching functions
@@ -7087,6 +7331,8 @@ which are interpreted as patterns by the pattern-matching functions
 and @Lid{string.match}.
 This section describes the syntax and the meaning
 (that is, what they match) of these strings.
+
+}
 
 @sect4{@title{Character Class:}
 A @def{character class} is used to represent a set of characters.
@@ -7259,7 +7505,7 @@ stored as the first capture, and therefore has @N{number 1};
 the character matching @St{.} is captured with @N{number 2},
 and the part matching @St{%s*} has @N{number 3}.
 
-As a special case, the empty capture @T{()} captures
+As a special case, the capture @T{()} captures
 the current string position (a number).
 For instance, if we apply the pattern @T{"()aa()"} on the
 string @T{"flaaap"}, there will be two captures: @N{3 and 5}.
@@ -7331,7 +7577,7 @@ coded as an unsigned integer with @id{n} bytes
 @item{@T{X@rep{op}}|an empty item that aligns
 according to option @id{op}
 (which is otherwise ignored)}
-@item{@Char{ }|(empty space) ignored}
+@item{@Char{ }|(space) ignored}
 }
 (A @St{[@rep{n}]} means an optional integral numeral.)
 Except for padding, spaces, and configurations
@@ -7451,7 +7697,7 @@ Returns the number of UTF-8 characters in string @id{s}
 that start between positions @id{i} and @id{j} (both inclusive).
 The default for @id{i} is @num{1} and for @id{j} is @num{-1}.
 If it finds any invalid byte sequence,
-returns a false value plus the position of the first invalid byte.
+returns @fail plus the position of the first invalid byte.
 
 }
 
@@ -7467,7 +7713,7 @@ so that @T{utf8.offset(s, -n)} gets the offset of the
 @id{n}-th character from the end of the string.
 If the specified character is neither in the subject
 nor right after its end,
-the function returns @nil.
+the function returns @fail.
 
 As a special case,
 when @id{n} is 0 the function returns the start of the encoding
@@ -7595,15 +7841,15 @@ This library provides basic mathematical functions.
 It provides all its functions and constants inside the table @defid{math}.
 Functions with the annotation @St{integer/float} give
 integer results for integer arguments
-and float results for float (or mixed) arguments.
-the rounding functions
+and float results for non-integer arguments.
+The rounding functions
 @Lid{math.ceil}, @Lid{math.floor}, and @Lid{math.modf}
 return an integer when the result fits in the range of an integer,
 or a float otherwise.
 
 @LibEntry{math.abs (x)|
 
-Returns the absolute value of @id{x}. (integer/float)
+Returns the maximum value between @id{x} and @id{-x}. (integer/float)
 
 }
 
@@ -7742,16 +7988,16 @@ is equivalent to @T{math.random(1,n)}.
 The call @T{math.random(0)} produces an integer with
 all bits (pseudo)random.
 
+This function uses the @idx{xoshiro256**} algorithm to produce
+pseudo-random 64-bit integers,
+which are the results of calls with @N{argument 0}.
+Other results (ranges and floats)
+are unbiased extracted from these integers.
+
 Lua initializes its pseudo-random generator with the equivalent of
 a call to @Lid{math.randomseed} with no arguments,
 so that @id{math.random} should generate
 different sequences of results each time the program runs.
-
-The results from this function have good statistical qualities,
-but they are not cryptographically secure.
-(For instance, there are no guarantees that it is hard
-to predict future results based on the observation of
-some number of previous results.)
 
 }
 
@@ -7767,6 +8013,11 @@ The default for @id{y} is zero.
 When called with no arguments,
 Lua generates a seed with
 a weak attempt for randomness.
+
+This function returns the two seed components
+that were effectively used,
+so that setting them again repeats the sequence.
+
 To ensure a required level of randomness to the initial state
 (or contrarily, to have a deterministic sequence,
 for instance when debugging a program),
@@ -7797,7 +8048,7 @@ Returns the tangent of @id{x} (assumed to be in radians).
 
 If the value @id{x} is convertible to an integer,
 returns that integer.
-Otherwise, returns @nil.
+Otherwise, returns @fail.
 
 }
 
@@ -7805,7 +8056,7 @@ Otherwise, returns @nil.
 
 Returns @St{integer} if @id{x} is an integer,
 @St{float} if it is a float,
-or @nil if @id{x} is not a number.
+or @fail if @id{x} is not a number.
 
 }
 
@@ -7818,7 +8069,6 @@ they are compared as @x{unsigned integers}.
 }
 
 }
-
 
 @sect2{iolib| @title{Input and Output Facilities}
 
@@ -7845,10 +8095,10 @@ three predefined file handles with their usual meanings from C:
 The I/O library never closes these files.
 
 Unless otherwise stated,
-all I/O functions return @nil on failure,
+all I/O functions return @fail on failure,
 plus an error message as a second result and
 a system-dependent error code as a third result,
-and some value different from @nil on success.
+and some non-false value on success.
 On non-POSIX systems,
 the computation of the error message and error code
 in case of errors
@@ -7887,8 +8137,8 @@ instead of returning an error code.
 Opens the given file name in read mode
 and returns an iterator function that
 works like @T{file:lines(@Cdots)} over the opened file.
-When the iterator function detects the end of file,
-it returns no values (to finish the loop) and automatically closes the file.
+When the iterator function fails to read any value,
+it automatically closes the file.
 Besides the iterator function,
 @id{io.lines} returns three other values:
 two @nil values as placeholders,
@@ -7902,7 +8152,8 @@ to @T{io.input():lines("l")};
 that is, it iterates over the lines of the default input file.
 In this case, the iterator does not close the file when the loop ends.
 
-In case of errors this function raises the error,
+In case of errors opening the file,
+this function raises the error,
 instead of returning an error code.
 
 }
@@ -7968,7 +8219,7 @@ and it is automatically removed when the program ends.
 Checks whether @id{obj} is a valid file handle.
 Returns the string @T{"file"} if @id{obj} is an open file handle,
 @T{"closed file"} if @id{obj} is a closed file handle,
-or @nil if @id{obj} is not a file handle.
+or @fail if @id{obj} is not a file handle.
 
 }
 
@@ -8014,9 +8265,6 @@ starting at the current position.
 Unlike @Lid{io.lines}, this function does not close the file
 when the loop ends.
 
-In case of errors this function raises the error,
-instead of returning an error code.
-
 }
 
 @LibEntry{file:read (@Cdots)|
@@ -8025,7 +8273,7 @@ Reads the file @id{file},
 according to the given formats, which specify what to read.
 For each format,
 the function returns a string or a number with the characters read,
-or @nil if it cannot read data with the specified format.
+or @fail if it cannot read data with the specified format.
 (In this latter case,
 the function does not read subsequent formats.)
 When called without arguments,
@@ -8038,36 +8286,38 @@ The available formats are
 @item{@St{n}|
 reads a numeral and returns it as a float or an integer,
 following the lexical conventions of Lua.
-(The numeral may have leading spaces and a sign.)
+(The numeral may have leading whitespaces and a sign.)
 This format always reads the longest input sequence that
 is a valid prefix for a numeral;
 if that prefix does not form a valid numeral
-(e.g., an empty string, @St{0x}, or @St{3.4e-}),
-it is discarded and the format returns @nil.
+(e.g., an empty string, @St{0x}, or @St{3.4e-})
+or it is too long (more than 200 characters),
+it is discarded and the format returns @fail.
 }
 
 @item{@St{a}|
 reads the whole file, starting at the current position.
-On end of file, it returns the empty string.
+On end of file, it returns the empty string;
+this format never fails.
 }
 
 @item{@St{l}|
 reads the next line skipping the end of line,
-returning @nil on end of file.
+returning @fail on end of file.
 This is the default format.
 }
 
 @item{@St{L}|
 reads the next line keeping the end-of-line character (if present),
-returning @nil on end of file.
+returning @fail on end of file.
 }
 
 @item{@emph{number}|
 reads a string with up to this number of bytes,
-returning @nil on end of file.
+returning @fail on end of file.
 If @id{number} is zero,
 it reads nothing and returns an empty string,
-or @nil on end of file.
+or @fail on end of file.
 }
 
 }
@@ -8088,7 +8338,7 @@ specified by the string @id{whence}, as follows:
 }
 In case of success, @id{seek} returns the final file position,
 measured in bytes from the beginning of the file.
-If @id{seek} fails, it returns @nil,
+If @id{seek} fails, it returns @fail,
 plus a string describing the error.
 
 The default value for @id{whence} is @T{"cur"},
@@ -8104,30 +8354,21 @@ end of the file, and returns its size.
 
 @LibEntry{file:setvbuf (mode [, size])|
 
-Sets the buffering mode for an output file.
+Sets the buffering mode for a file.
 There are three available modes:
 @description{
-
-@item{@St{no}|
-no buffering; the result of any output operation appears immediately.
+@item{@St{no}| no buffering.}
+@item{@St{full}| full buffering.}
+@item{@St{line}| line buffering.}
 }
 
-@item{@St{full}|
-full buffering; output operation is performed only
-when the buffer is full or when
-you explicitly @T{flush} the file @seeF{io.flush}.
-}
-
-@item{@St{line}|
-line buffering; output is buffered until a newline is output
-or there is any input from some special files
-(such as a terminal device).
-}
-
-}
 For the last two cases,
 @id{size} is a hint for the size of the buffer, in bytes.
 The default is an appropriate size.
+
+The specific behavior of each mode is non portable;
+check the underlying @ANSI{setvbuf} in your platform for
+more details.
 
 }
 
@@ -8137,7 +8378,6 @@ Writes the value of each of its arguments to @id{file}.
 The arguments must be strings or numbers.
 
 In case of success, this function returns @id{file}.
-Otherwise it returns @nil plus a string describing the error.
 
 }
 
@@ -8151,7 +8391,8 @@ This library is implemented through table @defid{os}.
 @LibEntry{os.clock ()|
 
 Returns an approximation of the amount in seconds of CPU time
-used by the program.
+used by the program,
+as returned by the underlying @ANSI{clock}.
 
 }
 
@@ -8184,7 +8425,7 @@ then @id{date} returns the date as a string,
 formatted according to the same rules as the @ANSI{strftime}.
 
 If @id{format} is absent, it defaults to @St{%c},
-which gives a reasonable date and time representation
+which gives a human-readable date and time representation
 using the current locale.
 
 On non-POSIX systems,
@@ -8209,7 +8450,7 @@ This function is equivalent to the @ANSI{system}.
 It passes @id{command} to be executed by an operating system shell.
 Its first result is @true
 if the command terminated successfully,
-or @nil otherwise.
+or @fail otherwise.
 After this first result
 the function returns a string plus a number,
 as follows:
@@ -8250,8 +8491,8 @@ closes the Lua state before exiting.
 
 @LibEntry{os.getenv (varname)|
 
-Returns the value of the process environment variable @id{varname},
-or @nil if the variable is not defined.
+Returns the value of the process environment variable @id{varname}
+or @fail if the variable is not defined.
 
 }
 
@@ -8259,7 +8500,7 @@ or @nil if the variable is not defined.
 
 Deletes the file (or empty directory, on @x{POSIX} systems)
 with the given name.
-If this function fails, it returns @nil,
+If this function fails, it returns @fail
 plus a string describing the error and the error code.
 Otherwise, it returns true.
 
@@ -8268,7 +8509,7 @@ Otherwise, it returns true.
 @LibEntry{os.rename (oldname, newname)|
 
 Renames the file or directory named @id{oldname} to @id{newname}.
-If this function fails, it returns @nil,
+If this function fails, it returns @fail,
 plus a string describing the error and the error code.
 Otherwise, it returns true.
 
@@ -8283,7 +8524,7 @@ Sets the current locale of the program.
 @T{"monetary"}, @T{"numeric"}, or @T{"time"};
 the default category is @T{"all"}.
 The function returns the name of the new locale,
-or @nil if the request cannot be honored.
+or @fail if the request cannot be honored.
 
 If @id{locale} is the empty string,
 the current locale is set to an implementation-defined native locale.
@@ -8402,6 +8643,8 @@ the current hook function, the current hook mask,
 and the current hook count,
 as set by the @Lid{debug.sethook} function.
 
+Returns @fail if there is no active hook.
+
 }
 
 @LibEntry{debug.getinfo ([thread,] f [, what])|
@@ -8413,10 +8656,10 @@ which means the function running at level @id{f} of the call stack
 of the given thread:
 @N{level 0} is the current function (@id{getinfo} itself);
 @N{level 1} is the function that called @id{getinfo}
-(except for tail calls, which do not count on the stack);
+(except for tail calls, which do not count in the stack);
 and so on.
 If @id{f} is a number greater than the number of active functions,
-then @id{getinfo} returns @nil.
+then @id{getinfo} returns @fail.
 
 The returned table can contain all the fields returned by @Lid{lua_getinfo},
 with the string @id{what} describing which fields to fill in.
@@ -8450,9 +8693,12 @@ The first parameter or local variable has @N{index 1}, and so on,
 following the order that they are declared in the code,
 counting only the variables that are active
 in the current scope of the function.
+Compile-time constants may not appear in this listing,
+if they were optimized away by the compiler.
 Negative indices refer to vararg arguments;
 @num{-1} is the first vararg argument.
-The function returns @nil if there is no variable with the given index,
+The function returns @fail
+if there is no variable with the given index,
 and raises an error when called with a level out of range.
 (You can call @Lid{debug.getinfo} to check whether the level is valid.)
 
@@ -8483,10 +8729,18 @@ Returns the registry table @see{registry}.
 
 This function returns the name and the value of the upvalue
 with index @id{up} of the function @id{f}.
-The function returns @nil if there is no upvalue with the given index.
+The function returns @fail
+if there is no upvalue with the given index.
 
-Variable names starting with @Char{(} (open parenthesis) @C{)}
-represent variables with no known names
+(For Lua functions,
+upvalues are the external local variables that the function uses,
+and that are consequently included in its closure.)
+
+For @N{C functions}, this function uses the empty string @T{""}
+as a name for all upvalues.
+
+Variable name @Char{?} (interrogation mark)
+represents variables with no known names
 (variables from chunks saved without debug information).
 
 }
@@ -8536,7 +8790,7 @@ and @N{level 1} is the hook function.)
 
 This function assigns the value @id{value} to the local variable
 with index @id{local} of the function at level @id{level} of the stack.
-The function returns @nil if there is no local
+The function returns @fail if there is no local
 variable with the given index,
 and raises an error when called with a @id{level} out of range.
 (You can call @id{getinfo} to check whether the level is valid.)
@@ -8559,9 +8813,11 @@ Returns @id{value}.
 
 This function assigns the value @id{value} to the upvalue
 with index @id{up} of the function @id{f}.
-The function returns @nil if there is no upvalue
+The function returns @fail if there is no upvalue
 with the given index.
 Otherwise, it returns the name of the upvalue.
+
+See @Lid{debug.getupvalue} for more information about upvalues.
 
 }
 
@@ -8572,7 +8828,7 @@ the @id{n}-th user value associated to the given @id{udata}.
 @id{udata} must be a full userdata.
 
 Returns @id{udata},
-or @nil if the userdata does not have that value.
+or @fail if the userdata does not have that value.
 
 }
 
@@ -8633,14 +8889,15 @@ lua [options] [script [args]]
 }
 The options are:
 @description{
-@item{@T{-e @rep{stat}}| executes string @rep{stat};}
-@item{@T{-l @rep{mod}}| @Q{requires} @rep{mod} and assigns the
+@item{@T{-e @rep{stat}}| execute string @rep{stat};}
+@item{@T{-i}| enter interactive mode after running @rep{script};}
+@item{@T{-l @rep{mod}}| @Q{require} @rep{mod} and assign the
   result to global @rep{mod};}
-@item{@T{-i}| enters interactive mode after running @rep{script};}
-@item{@T{-v}| prints version information;}
-@item{@T{-E}| ignores environment variables;}
-@item{@T{--}| stops handling options;}
-@item{@T{-}| executes @id{stdin} as a file and stops handling options.}
+@item{@T{-v}| print version information;}
+@item{@T{-E}| ignore environment variables;}
+@item{@T{-W}| turn warnings on;}
+@item{@T{--}| stop handling options;}
+@item{@T{-}| execute @id{stdin} as a file and stop handling options.}
 }
 After handling its options, @id{lua} runs the given @emph{script}.
 When called without arguments,
@@ -8657,19 +8914,18 @@ then @id{lua} executes the file.
 Otherwise, @id{lua} executes the string itself.
 
 When called with the option @T{-E},
-besides ignoring @id{LUA_INIT},
-Lua also ignores
-the values of @id{LUA_PATH} and @id{LUA_CPATH},
-setting the values of
-@Lid{package.path} and @Lid{package.cpath}
-with the default paths defined in @id{luaconf.h}.
+Lua does not consult any environment variables.
+In particular,
+the values of @Lid{package.path} and @Lid{package.cpath}
+are set with the default paths defined in @id{luaconf.h}.
 
-All options are handled in order, except @T{-i} and @T{-E}.
+The options @T{-e}, @T{-l}, and @T{-W} are handled in
+the order they appear.
 For instance, an invocation like
 @verbatim{
-$ lua -e'a=1' -e 'print(a)' script.lua
+$ lua -e 'a=1' -llib1 script.lua
 }
-will first set @id{a} to 1, then print the value of @id{a},
+will first set @id{a} to 1, then require the library @id{lib1},
 and finally run the file @id{script.lua} with no arguments.
 (Here @T{$} is the shell prompt. Your prompt may be different.)
 
@@ -8729,7 +8985,8 @@ has a metamethod @idx{__tostring},
 the interpreter calls this metamethod to produce the final message.
 Otherwise, the interpreter converts the error object to a string
 and adds a stack traceback to it.
-Warnings are simply printed in the standard error output.
+When warnings are on,
+they are simply printed in the standard error output.
 
 When finishing normally,
 the interpreter closes its main Lua state
@@ -8760,12 +9017,22 @@ is a more portable solution.
 
 @sect1{incompat| @title{Incompatibilities with the Previous Version}
 
+@simplesect{
+
 Here we list the incompatibilities that you may find when moving a program
 from @N{Lua 5.3} to @N{Lua 5.4}.
+
 You can avoid some incompatibilities by compiling Lua with
 appropriate options (see file @id{luaconf.h}).
 However,
 all these compatibility options will be removed in the future.
+More often than not,
+compatibility issues arise when these compatibility options
+are removed.
+So, whenever you have the chance,
+you should try to test your code with a version of Lua compiled
+with all compatibility options turned off.
+That will ease transitions to newer versions of Lua.
 
 Lua versions can always change the C API in ways that
 do not imply source-code changes in a program,
@@ -8783,6 +9050,8 @@ precompiled chunks are not compatible between different Lua versions.
 
 The standard paths in the official distribution may
 change between versions.
+
+}
 
 @sect2{@title{Incompatibilities in the Language}
 @itemize{
@@ -8802,6 +9071,14 @@ not a float.
 }
 
 @item{
+Literal decimal integer constants that overflow are read as floats,
+instead of wrapping around.
+You can use hexadecimal notation for such constants if you
+want the old behavior
+(reading them as integers with wrap around).
+}
+
+@item{
 The use of the @idx{__lt} metamethod to emulate @id{__le}
 has been removed.
 When needed, this metamethod must be explicitly defined.
@@ -8811,11 +9088,6 @@ When needed, this metamethod must be explicitly defined.
 The semantics of the numerical @Rw{for} loop
 over integers changed in some details.
 In particular, the control variable never wraps around.
-}
-
-@item{
-When a coroutine finishes with an error,
-its stack is unwound (to run any pending closing methods).
 }
 
 @item{
@@ -8856,6 +9128,23 @@ Moreover, it uses a different algorithm.
 By default, the decoding functions in the @Lid{utf8} library
 do not accept surrogates as valid code points.
 An extra parameter in these functions makes them more permissive.
+}
+
+@item{
+The options @St{setpause} and @St{setstepmul}
+of the function @Lid{collectgarbage} are deprecated.
+You should use the new option @St{incremental} to set them.
+}
+
+@item{
+The function @Lid{io.lines} now returns four values,
+instead of just one.
+That can be a problem when it is used as the sole
+argument to another function that has optional parameters,
+such as in @T{load(io.lines(filename, "L"))}.
+To fix that issue,
+you can wrap the call into parentheses,
+to adjust its number of results to one.
 }
 
 }
@@ -8903,6 +9192,12 @@ Errors in finalizers are never propagated;
 instead, they generate a warning.
 }
 
+@item{
+The options @idx{LUA_GCSETPAUSE} and @idx{LUA_GCSETSTEPMUL}
+of the function @Lid{lua_gc} are deprecated.
+You should use the new option @id{LUA_GCINC} to set them.
+}
+
 }
 
 }
@@ -8948,9 +9243,13 @@ and @bnfNter{LiteralString}, see @See{lexical}.)
 @OrNL   @Rw{for} namelist @Rw{in} explist @Rw{do} block @Rw{end}
 @OrNL	@Rw{function} funcname funcbody
 @OrNL	@Rw{local} @Rw{function} @bnfNter{Name} funcbody
-@OrNL	@Rw{local} namelist @bnfopt{@bnfter{=} explist}
-@OrNL	@Rw{local} @bnfter{*} @bnfter{toclose} Name @bnfter{=} exp
+@OrNL	@Rw{local} attnamelist @bnfopt{@bnfter{=} explist}
 }
+
+@producname{attnamelist}@producbody{
+  @bnfNter{Name} attrib @bnfrep{@bnfter{,} @bnfNter{Name} attrib}}
+
+@producname{attrib}@producbody{@bnfopt{@bnfter{<} @bnfNter{Name} @bnfter{>}}}
 
 @producname{retstat}@producbody{@Rw{return}
                                    @bnfopt{explist} @bnfopt{@bnfter{;}}}

@@ -11,6 +11,9 @@ local debug = require "debug"
 local pack = table.pack
 
 
+-- standard error message for memory errors
+local MEMERRMSG = "not enough memory"
+
 function tcheck (t1, t2)
   assert(t1.n == (t2.n or #t2) + 1)
   for i = 2, t1.n do assert(t1[i] == t2[i - 1]) end
@@ -241,6 +244,23 @@ assert(a == 20 and b == false)
 a,b = T.testC("compare LE 5 -6, return 2", a1, 2, 2, a1, 2, 20)
 assert(a == 20 and b == true)
 
+
+do  -- testing lessthan and lessequal with metamethods
+  local mt = {__lt = function (a,b) return a[1] < b[1] end,
+              __le = function (a,b) return a[1] <= b[1] end,
+              __eq = function (a,b) return a[1] == b[1] end}
+  local function O (x)
+    return setmetatable({x}, mt)
+  end
+
+  local a, b = T.testC("compare LT 2 3; pushint 10; return 2", O(1), O(2))
+  assert(a == true and b == 10)
+  local a, b = T.testC("compare LE 2 3; pushint 10; return 2", O(3), O(2))
+  assert(a == false and b == 10)
+  local a, b = T.testC("compare EQ 2 3; pushint 10; return 2", O(3), O(3))
+  assert(a == true and b == 10)
+end
+
 -- testing length
 local t = setmetatable({x = 20}, {__len = function (t) return t.x end})
 a,b,c = T.testC([[
@@ -354,8 +374,11 @@ assert(to("topointer", nil) == null)
 assert(to("topointer", "abc") ~= null)
 assert(to("topointer", string.rep("x", 10)) ==
        to("topointer", string.rep("x", 10)))    -- short strings
-assert(to("topointer", string.rep("x", 300)) ~=
-       to("topointer", string.rep("x", 300)))    -- long strings
+do    -- long strings
+  local s1 = string.rep("x", 300)
+  local s2 = string.rep("x", 300)
+  assert(to("topointer", s1) ~= to("topointer", s2))
+end
 assert(to("topointer", T.pushuserdata(20)) ~= null)
 assert(to("topointer", io.read) ~= null)           -- light C function
 assert(to("topointer", hfunc) ~= null)        -- "heavy" C function
@@ -388,7 +411,7 @@ do
 
   -- memory error
   T.totalmem(T.totalmem()+10000)   -- set low memory limit (+10k)
-  assert(T.checkpanic("newuserdata 20000") == "not enough memory")
+  assert(T.checkpanic("newuserdata 20000") == MEMERRMSG)
   T.totalmem(0)          -- restore high limit
 
   -- stack error
@@ -496,9 +519,57 @@ print"+"
 
 do   -- getp/setp
   local a = {}
-  T.testC("rawsetp 2 1", a, 20)
+  local a1 = T.testC("rawsetp 2 1; return 1", a, 20)
+  assert(a == a1)
   assert(a[T.pushuserdata(1)] == 20)
-  assert(T.testC("rawgetp 2 1; return 1", a) == 20)
+  local a1, res = T.testC("rawgetp -1 1; return 2", a)
+  assert(a == a1 and res == 20)
+end
+
+
+do  -- using the table itself as index
+  local a = {}
+  a[a] = 10
+  local prog = "gettable -1; return *"
+  local res = {T.testC(prog, a)}
+  assert(#res == 2 and res[1] == prog and res[2] == 10)
+
+  local prog = "settable -2; return *"
+  local res = {T.testC(prog, a, 20)}
+  assert(a[a] == 20)
+  assert(#res == 1 and res[1] == prog)
+
+  -- raw
+  a[a] = 10
+  local prog = "rawget -1; return *"
+  local res = {T.testC(prog, a)}
+  assert(#res == 2 and res[1] == prog and res[2] == 10)
+
+  local prog = "rawset -2; return *"
+  local res = {T.testC(prog, a, 20)}
+  assert(a[a] == 20)
+  assert(#res == 1 and res[1] == prog)
+
+  -- using the table as the value to set
+  local prog = "rawset -1; return *"
+  local res = {T.testC(prog, 30, a)}
+  assert(a[30] == a)
+  assert(#res == 1 and res[1] == prog)
+
+  local prog = "settable -1; return *"
+  local res = {T.testC(prog, 40, a)}
+  assert(a[40] == a)
+  assert(#res == 1 and res[1] == prog)
+
+  local prog = "rawseti -1 100; return *"
+  local res = {T.testC(prog, a)}
+  assert(a[100] == a)
+  assert(#res == 1 and res[1] == prog)
+
+  local prog = "seti -1 200; return *"
+  local res = {T.testC(prog, a)}
+  assert(a[200] == a)
+  assert(#res == 1 and res[1] == prog)
 end
 
 a = {x=0, y=12}
@@ -632,7 +703,7 @@ for k, v in ipairs(t) do
   assert(v1 == v and p)
 end
 
-assert(debug.getuservalue(4) == nil)
+assert(not debug.getuservalue(4))
 
 debug.setuservalue(b, function () return 10 end, 10)
 collectgarbage()   -- function should not be collected
@@ -737,7 +808,7 @@ F = function (x)
   if A ~= nil then
     assert(type(A) == "userdata")
     assert(T.udataval(A) == B)
-    debug.getmetatable(A)    -- just acess it
+    debug.getmetatable(A)    -- just access it
   end
   A = x   -- ressucita userdata
   B = udval
@@ -911,6 +982,7 @@ assert(t[7] == nil)
 
 -------------------------------------------------------------------------
 do   -- testing errors during GC
+  warn("@off")
   collectgarbage("stop")
   local a = {}
   for i=1,20 do
@@ -928,6 +1000,7 @@ do   -- testing errors during GC
   collectgarbage()
   assert(A == 10)  -- number of normal collections
   collectgarbage("restart")
+  warn("@on")
 end
 -------------------------------------------------------------------------
 -- test for userdata vals
@@ -1030,7 +1103,7 @@ do
   assert(type(a[1]) == "string" and a[2][1] == 11)
   assert(#openresource == 0)    -- was closed
 
-  -- error
+  -- closing by error
   local a, b = pcall(T.makeCfunc[[
     call 0 1   # create resource
     toclose -1 # mark it to be closed
@@ -1038,6 +1111,15 @@ do
   ]], newresource)
   assert(a == false and b[1] == 11)
   assert(#openresource == 0)    -- was closed
+
+  -- non-closable value
+  local a, b = pcall(T.makeCfunc[[
+    newtable   # create non-closable object
+    toclose -1 # mark it to be closed (should raise an error)
+    abort  # will not be executed
+  ]])
+  assert(a == false and
+    string.find(b, "non%-closable value"))
 
   local function check (n)
     assert(#openresource == n)
@@ -1074,40 +1156,74 @@ do
 end
 
 
--------------------------------------------------------------------------
--- testing memory limits
--------------------------------------------------------------------------
+--[[
+** {==================================================================
+** Testing memory limits
+** ===================================================================
+--]]
+
 print("memory-allocation errors")
 
 checkerr("block too big", T.newuserdata, math.maxinteger)
 collectgarbage()
 local f = load"local a={}; for i=1,100000 do a[i]=i end"
 T.alloccount(10)
-checkerr("not enough memory", f)
+checkerr(MEMERRMSG, f)
 T.alloccount()          -- remove limit
+
+
+-- test memory errors; increase limit for maximum memory by steps,
+-- o that we get memory errors in all allocations of a given
+-- task, until there is enough memory to complete the task without
+-- errors.
+function testbytes (s, f)
+  collectgarbage()
+  local M = T.totalmem()
+  local oldM = M
+  local a,b = nil
+  while true do
+    collectgarbage(); collectgarbage()
+    T.totalmem(M)
+    a, b = T.testC("pcall 0 1 0; pushstatus; return 2", f)
+    T.totalmem(0)  -- remove limit
+    if a and b == "OK" then break end       -- stop when no more errors
+    if b ~= "OK" and b ~= MEMERRMSG then    -- not a memory error?
+      error(a, 0)   -- propagate it
+    end
+    M = M + 7   -- increase memory limit
+  end
+  print(string.format("minimum memory for %s: %d bytes", s, M - oldM))
+  return a
+end
 
 -- test memory errors; increase limit for number of allocations one
 -- by one, so that we get memory errors in all allocations of a given
 -- task, until there is enough allocations to complete the task without
 -- errors.
 
-function testamem (s, f)
-  collectgarbage(); collectgarbage()
+function testalloc (s, f)
+  collectgarbage()
   local M = 0
   local a,b = nil
   while true do
+    collectgarbage(); collectgarbage()
     T.alloccount(M)
-    a, b = pcall(f)
+    a, b = T.testC("pcall 0 1 0; pushstatus; return 2", f)
     T.alloccount()  -- remove limit
-    if a and b then break end       -- stop when no more errors
-    if not a and not    -- `real' error?
-      (string.find(b, "memory") or string.find(b, "overflow")) then
-      error(b, 0)   -- propagate it
+    if a and b == "OK" then break end       -- stop when no more errors
+    if b ~= "OK" and b ~= MEMERRMSG then    -- not a memory error?
+      error(a, 0)   -- propagate it
     end
     M = M + 1   -- increase allocation limit
   end
-  print(string.format("limit for %s: %d allocations", s, M))
-  return b
+  print(string.format("minimum allocations for %s: %d allocations", s, M))
+  return a
+end
+
+
+local function testamem (s, f)
+  testalloc(s, f)
+  return testbytes(s, f)
 end
 
 
@@ -1117,8 +1233,11 @@ assert(b == 10)
 
 -- testing memory errors when creating a new state
 
-b = testamem("state creation", T.newstate)
-T.closestate(b);  -- close new state
+testamem("state creation", function ()
+  local st = T.newstate()
+  if st then T.closestate(st) end   -- close new state
+  return st
+end)
 
 testamem("empty-table creation", function ()
   return {}
@@ -1137,7 +1256,8 @@ end)
 testamem("to-be-closed variables", function()
   local flag
   do
-    local *toclose x = setmetatable({}, {__close = function () flag = true end})
+    local x <close> =
+              setmetatable({}, {__close = function () flag = true end})
     flag = false
     local x = {}
   end
@@ -1264,6 +1384,9 @@ testamem("growing stack", function ()
   end
   return foo(100)
 end)
+
+-- }==================================================================
+
 
 do   -- testing failing in 'lua_checkstack'
   local res = T.testC([[rawcheckstack 500000; return 1]])

@@ -119,6 +119,16 @@ else
 end
 ]], {2,3,4,7})
 
+test([[
+local function foo()
+end
+foo()
+A = 1
+A = 2
+A = 3
+]], {2, 3, 2, 4, 5, 6})
+
+
 test([[--
 if nil then
   a=1
@@ -255,6 +265,10 @@ do   -- test hook presence in debug info
 end
 
 
+-- hook table has weak keys
+assert(getmetatable(debug.getregistry()._HOOKKEY).__mode == 'k')
+
+
 a = {}; L = nil
 local glob = 1
 local oldglob = glob
@@ -347,12 +361,12 @@ assert(g(0,0) == 30)
  
 
 debug.sethook(nil);
-assert(debug.gethook() == nil)
+assert(not debug.gethook())
 
 
 -- minimal tests for setuservalue/getuservalue
 do
-  assert(debug.setuservalue(io.stdin, 10) == nil)
+  assert(not debug.setuservalue(io.stdin, 10))
   local a, b = debug.getuservalue(io.stdin, 10)
   assert(a == nil and not b)
 end
@@ -410,7 +424,7 @@ end, "c")
 a:f(1,2,3,4,5)
 assert(X.self == a and X.a == 1   and X.b == 2 and X.c == nil)
 assert(XX == 12)
-assert(debug.gethook() == nil)
+assert(not debug.gethook())
 
 
 -- testing access to local variables in return hook (bug in 5.2)
@@ -645,6 +659,11 @@ t = debug.getinfo(1)   -- main
 assert(t.isvararg == true and t.nparams == 0 and t.nups == 1 and
        debug.getupvalue(t.func, 1) == "_ENV")
 
+t = debug.getinfo(math.sin)   -- C function
+assert(t.isvararg == true and t.nparams == 0 and t.nups == 0)
+
+t = debug.getinfo(string.gmatch("abc", "a"))   -- C closure
+assert(t.isvararg == true and t.nparams == 0 and t.nups > 0)
 
 
 
@@ -802,8 +821,7 @@ assert(a+3 == "add" and 3-a == "sub" and a*3 == "mul" and
        -a == "unm" and #a == "len" and a&3 == "band")
 assert(a + 30000 == "add" and a - 3.0 == "sub" and a * 3.0 == "mul" and
        -a == "unm" and #a == "len" and a & 3 == "band")
-assert(a|3 == "bor" and 3~a == "bxor" and a<<3 == "shift" and
-       a>>1 == "shift")
+assert(a|3 == "bor" and 3~a == "bxor" and a<<3 == "shl" and a>>1 == "shr")
 assert (a==b and a.op == "eq")
 assert (a>=b and a.op == "order")
 assert (a>b and a.op == "order")
@@ -876,7 +894,7 @@ end
 
 
 print("testing debug functions on chunk without debug info")
-prog = [[-- program to be loaded without debug information
+prog = [[-- program to be loaded without debug information (strip)
 local debug = require'debug'
 local a = 12  -- a local variable
 
@@ -918,6 +936,23 @@ return a
 local f = assert(load(string.dump(load(prog), true)))
 
 assert(f() == 13)
+
+do   -- bug in 5.4.0: line hooks in stripped code
+  local function foo ()
+    local a = 1
+    local b = 2
+    return b
+  end
+
+  local s = load(string.dump(foo, true))
+  local line = true
+  debug.sethook(function (e, l)
+    assert(e == "line")
+    line = l
+  end, "l")
+  assert(s() == 2); debug.sethook(nil)
+  assert(line == nil)  -- hook called withoug debug info for 1st instruction
+end
 
 do   -- tests for 'source' in binary dumps
   local prog = [[

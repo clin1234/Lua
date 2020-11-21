@@ -123,35 +123,36 @@ assert(#a == 22 and a[#a] == 79)
 x, a = nil
 
 
--- coroutine kill
-do
-  -- ok to kill a dead coroutine
-  local co = coroutine.create(print)
-  assert(coroutine.resume(co, "testing 'coroutine.kill'"))
-  assert(coroutine.status(co) == "dead")
-  assert(coroutine.kill(co))
+-- coroutine closing
 
-  -- cannot kill the running coroutine
-  local st, msg = pcall(coroutine.kill, coroutine.running())
+local function func2close (f)
+  return setmetatable({}, {__close = f})
+end
+
+do
+  -- ok to close a dead coroutine
+  local co = coroutine.create(print)
+  assert(coroutine.resume(co, "testing 'coroutine.close'"))
+  assert(coroutine.status(co) == "dead")
+  assert(coroutine.close(co))
+
+  -- cannot close the running coroutine
+  local st, msg = pcall(coroutine.close, coroutine.running())
   assert(not st and string.find(msg, "running"))
 
   local main = coroutine.running()
 
-  -- cannot kill a "normal" coroutine
+  -- cannot close a "normal" coroutine
   ;(coroutine.wrap(function ()
-    local st, msg = pcall(coroutine.kill, main)
+    local st, msg = pcall(coroutine.close, main)
     assert(not st and string.find(msg, "normal"))
   end))()
 
   -- to-be-closed variables in coroutines
   local X
 
-  local function func2close (f)
-    return setmetatable({}, {__close = f})
-  end
-
   co = coroutine.create(function ()
-    local *toclose x = func2close(function (self, err)
+    local x <close> = func2close(function (self, err)
       assert(err == nil); X = false
     end)
     X = true
@@ -159,20 +160,54 @@ do
   end)
   coroutine.resume(co)
   assert(X)
-  assert(coroutine.kill(co))
+  assert(coroutine.close(co))
   assert(not X and coroutine.status(co) == "dead")
 
-  -- error killing a coroutine
+  -- error closing a coroutine
+  warn("@on")
+  local x = 0
   co = coroutine.create(function()
-    local *toclose x = func2close(function (self, err)
+    local y <close> = func2close(function (self,err)
+      if (err ~= 111) then os.exit(false) end   -- should not happen
+      x = 200
+      error("200")
+    end)
+    local x <close> = func2close(function (self, err)
       assert(err == nil); error(111)
     end)
     coroutine.yield()
   end)
   coroutine.resume(co)
-  local st, msg = coroutine.kill(co)
-  assert(not st and coroutine.status(co) == "dead" and msg == 111)
+  assert(x == 0)
+  -- with test library, use 'store' mode to check warnings
+  warn(not T and "@off" or "@store")
+  local st, msg = coroutine.close(co)
+  if not T then
+    warn("@on")
+  else   -- test library
+    assert(string.find(_WARN, "200")); _WARN = false
+    warn("@normal")
+  end
+  assert(st == false and coroutine.status(co) == "dead" and msg == 111)
+  assert(x == 200)
 
+end
+
+do
+  -- <close> versus pcall in coroutines
+  local X = false
+  local Y = false
+  function foo ()
+    local x <close> = func2close(function (self, err)
+      Y = debug.getinfo(2)
+      X = err
+    end)
+    error(43)
+  end
+  co = coroutine.create(function () return pcall(foo) end)
+  local st1, st2, err = coroutine.resume(co)
+  assert(st1 and not st2 and err == 43)
+  assert(X == 43 and Y.name == "pcall")
 end
 
 
@@ -348,7 +383,7 @@ do
 
   local X = false
   A = coroutine.wrap(function()
-    local *toclose _ = setmetatable({}, {__close = function () X = true end})
+    local _ <close> = setmetatable({}, {__close = function () X = true end})
     return pcall(A, 1)
   end)
   st, res = A()
@@ -390,7 +425,8 @@ assert(_G.f() == 12)
 
 
 if not T then
-  (Message or print)('\n >>> testC not active: skipping yield/hook tests <<<\n')
+  (Message or print)
+      ('\n >>> testC not active: skipping coroutine API tests <<<\n')
 else
   print "testing yields inside hooks"
 
@@ -418,6 +454,10 @@ else
   while A==0 or B==0 do    -- A ~= 0 when 'x' finishes (similar for 'B','y')
     if A==0 then turn = "A"; assert(T.resume(x)) end
     if B==0 then turn = "B"; assert(T.resume(y)) end
+
+    -- check that traceback works correctly after yields inside hooks
+    debug.traceback(x)
+    debug.traceback(y)
   end
 
   assert(B // A == 7)    -- fact(7) // fact(6)
@@ -543,8 +583,17 @@ else
          c == "ERRRUN" and d == 4)
 
 
-  -- using a main thread as a coroutine
+  -- using a main thread as a coroutine  (dubious use!)
   local state = T.newstate()
+
+  -- check that yielddable is working correctly
+  assert(T.testC(state, "newthread; isyieldable -1; remove 1; return 1"))
+
+  -- main thread is not yieldable
+  assert(not T.testC(state, "rawgeti R 1; isyieldable -1; remove 1; return 1"))
+
+  T.testC(state, "settop 0")
+
   T.loadlib(state)
 
   assert(T.doremote(state, [[
@@ -703,6 +752,17 @@ assert(run(function () return a / b end, {"div"}) == 10/12)
 assert(run(function () return a % b end, {"mod"}) == 10)
 assert(run(function () return a // b end, {"idiv"}) == 0)
 
+-- repeat tests with larger constants (to use 'K' opcodes)
+local a1000 = new(1000)
+
+assert(run(function () return a1000 + 1000 end, {"add"}) == 2000)
+assert(run(function () return a1000 - 25000 end, {"sub"}) == -24000)
+assert(run(function () return 2000 * a end, {"mul"}) == 20000)
+assert(run(function () return a1000 / 1000 end, {"div"}) == 1)
+assert(run(function () return a1000 % 600 end, {"mod"}) == 400)
+assert(run(function () return a1000 // 500 end, {"idiv"}) == 2)
+
+
 
 assert(run(function () return a % b end, {"mod"}) == 10)
 
@@ -715,6 +775,12 @@ assert(run(function () return a >> b end, {"shr"}) == 10 >> 12)
 assert(run(function () return 10 & b end, {"band"}) == 10 & 12)
 assert(run(function () return a | 2 end, {"bor"}) == 10 | 2)
 assert(run(function () return a ~ 2 end, {"bxor"}) == 10 ~ 2)
+assert(run(function () return a >> 2 end, {"shr"}) == 10 >> 2)
+assert(run(function () return 1 >> a end, {"shr"}) == 1 >> 10)
+assert(run(function () return a << 2 end, {"shl"}) == 10 << 2)
+assert(run(function () return 1 << a end, {"shl"}) == 1 << 10)
+assert(run(function () return 2 ~ a end, {"bxor"}) == 2 ~ 10)
+
 
 assert(run(function () return a..b end, {"concat"}) == "1012")
 
@@ -725,7 +791,7 @@ assert(run(function() return "a" .. "b" .. a .. "c" .. c .. b .. "x" end,
        {"concat", "concat", "concat"}) == "ab10chello12x")
 
 
-do   -- a few more tests for comparsion operators
+do   -- a few more tests for comparison operators
   local mt1 = {
     __le = function (a,b)
       coroutine.yield(10)
@@ -797,7 +863,7 @@ assert(run(function ()
 -- tests for coroutine API
 if T==nil then
   (Message or print)('\n >>> testC not active: skipping coroutine API tests <<<\n')
-  return
+  print "OK"; return
 end
 
 print('testing coroutine API')

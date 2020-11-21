@@ -46,8 +46,8 @@
 
 
 /*
-** search for 'objidx' in table at index -1.
-** return 1 + string at top if find a good name.
+** Search for 'objidx' in table at index -1. ('objidx' must be an
+** absolute index.) Return 1 + string at top if it found a good name.
 */
 static int findfield (lua_State *L, int objidx, int level) {
   if (level == 0 || !lua_istable(L, -1))
@@ -60,10 +60,10 @@ static int findfield (lua_State *L, int objidx, int level) {
         return 1;
       }
       else if (findfield(L, objidx, level - 1)) {  /* try recursively */
-        lua_remove(L, -2);  /* remove table (but keep name) */
-        lua_pushliteral(L, ".");
-        lua_insert(L, -2);  /* place '.' between the two names */
-        lua_concat(L, 3);
+        /* stack: lib_name, lib_table, field_name (top) */
+        lua_pushliteral(L, ".");  /* place '.' between the two names */
+        lua_replace(L, -3);  /* (in the slot occupied by table) */
+        lua_concat(L, 3);  /* lib_name.field_name */
         return 1;
       }
     }
@@ -86,8 +86,8 @@ static int pushglobalfuncname (lua_State *L, lua_Debug *ar) {
       lua_pushstring(L, name + 3);  /* push name without prefix */
       lua_remove(L, -2);  /* remove original name */
     }
-    lua_copy(L, -1, top + 1);  /* move name to proper place */
-    lua_pop(L, 2);  /* remove pushed values */
+    lua_copy(L, -1, top + 1);  /* copy name to proper place */
+    lua_settop(L, top + 1);  /* remove table "loaded" and name copy */
     return 1;
   }
   else {
@@ -130,32 +130,37 @@ static int lastlevel (lua_State *L) {
 
 LUALIB_API void luaL_traceback (lua_State *L, lua_State *L1,
                                 const char *msg, int level) {
+  luaL_Buffer b;
   lua_Debug ar;
-  int top = lua_gettop(L);
   int last = lastlevel(L1);
-  int n1 = (last - level > LEVELS1 + LEVELS2) ? LEVELS1 : -1;
-  if (msg)
-    lua_pushfstring(L, "%s\n", msg);
-  luaL_checkstack(L, 10, NULL);
-  lua_pushliteral(L, "stack traceback:");
+  int limit2show = (last - level > LEVELS1 + LEVELS2) ? LEVELS1 : -1;
+  luaL_buffinit(L, &b);
+  if (msg) {
+    luaL_addstring(&b, msg);
+    luaL_addchar(&b, '\n');
+  }
+  luaL_addstring(&b, "stack traceback:");
   while (lua_getstack(L1, level++, &ar)) {
-    if (n1-- == 0) {  /* too many levels? */
-      lua_pushliteral(L, "\n\t...");  /* add a '...' */
-      level = last - LEVELS2 + 1;  /* and skip to last ones */
+    if (limit2show-- == 0) {  /* too many levels? */
+      int n = last - level - LEVELS2 + 1;  /* number of levels to skip */
+      lua_pushfstring(L, "\n\t...\t(skipping %d levels)", n);
+      luaL_addvalue(&b);  /* add warning about skip */
+      level += n;  /* and skip to last levels */
     }
     else {
       lua_getinfo(L1, "Slnt", &ar);
-      lua_pushfstring(L, "\n\t%s:", ar.short_src);
-      if (ar.currentline > 0)
-        lua_pushfstring(L, "%d:", ar.currentline);
-      lua_pushliteral(L, " in ");
+      if (ar.currentline <= 0)
+        lua_pushfstring(L, "\n\t%s: in ", ar.short_src);
+      else
+        lua_pushfstring(L, "\n\t%s:%d: in ", ar.short_src, ar.currentline);
+      luaL_addvalue(&b);
       pushfuncname(L, &ar);
+      luaL_addvalue(&b);
       if (ar.istailcall)
-        lua_pushliteral(L, "\n\t(...tail calls...)");
-      lua_concat(L, lua_gettop(L) - top);
+        luaL_addstring(&b, "\n\t(...tail calls...)");
     }
   }
-  lua_concat(L, lua_gettop(L) - top);
+  luaL_pushresult(&b);
 }
 
 /* }====================================================== */
@@ -244,7 +249,7 @@ LUALIB_API int luaL_fileresult (lua_State *L, int stat, const char *fname) {
     return 1;
   }
   else {
-    lua_pushnil(L);
+    luaL_pushfail(L);
     if (fname)
       lua_pushfstring(L, "%s: %s", fname, strerror(en));
     else
@@ -278,18 +283,18 @@ LUALIB_API int luaL_fileresult (lua_State *L, int stat, const char *fname) {
 
 
 LUALIB_API int luaL_execresult (lua_State *L, int stat) {
-  const char *what = "exit";  /* type of termination */
-  if (stat == -1)  /* error? */
+  if (stat != 0 && errno != 0)  /* error with an 'errno'? */
     return luaL_fileresult(L, 0, NULL);
   else {
+    const char *what = "exit";  /* type of termination */
     l_inspectstat(stat, what);  /* interpret result */
     if (*what == 'e' && stat == 0)  /* successful termination? */
       lua_pushboolean(L, 1);
     else
-      lua_pushnil(L);
+      luaL_pushfail(L);
     lua_pushstring(L, what);
     lua_pushinteger(L, stat);
-    return 3;  /* return true/nil,what,code */
+    return 3;  /* return true/fail,what,code */
   }
 }
 
@@ -470,8 +475,10 @@ static void *resizebox (lua_State *L, int idx, size_t newsize) {
   lua_Alloc allocf = lua_getallocf(L, &ud);
   UBox *box = (UBox *)lua_touserdata(L, idx);
   void *temp = allocf(ud, box->box, box->bsize, newsize);
-  if (temp == NULL && newsize > 0)  /* allocation error? */
-    luaL_error(L, "not enough memory for buffer allocation");
+  if (temp == NULL && newsize > 0) {  /* allocation error? */
+    lua_pushliteral(L, "not enough memory");
+    lua_error(L);  /* raise a memory error */
+  }
   box->box = temp;
   box->bsize = newsize;
   return temp;
@@ -897,10 +904,14 @@ LUALIB_API const char *luaL_tolstring (lua_State *L, int idx, size_t *len) {
 LUALIB_API void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
   luaL_checkstack(L, nup, "too many upvalues");
   for (; l->name != NULL; l++) {  /* fill the table with given functions */
-    int i;
-    for (i = 0; i < nup; i++)  /* copy upvalues to the top */
-      lua_pushvalue(L, -nup);
-    lua_pushcclosure(L, l->func, nup);  /* closure with those upvalues */
+    if (l->func == NULL)  /* place holder? */
+      lua_pushboolean(L, 0);
+    else {
+      int i;
+      for (i = 0; i < nup; i++)  /* copy upvalues to the top */
+        lua_pushvalue(L, -nup);
+      lua_pushcclosure(L, l->func, nup);  /* closure with those upvalues */
+    }
     lua_setfield(L, -(nup + 2), l->name);
   }
   lua_pop(L, nup);  /* remove upvalues */
@@ -986,36 +997,76 @@ static void *l_alloc (void *ud, void *ptr, size_t osize, size_t nsize) {
 
 
 static int panic (lua_State *L) {
+  const char *msg = lua_tostring(L, -1);
+  if (msg == NULL) msg = "error object is not a string";
   lua_writestringerror("PANIC: unprotected error in call to Lua API (%s)\n",
-                        lua_tostring(L, -1));
+                        msg);
   return 0;  /* return to Lua to abort */
 }
 
 
 /*
-** Emit a warning. '*previoustocont' signals whether previous message
-** was to be continued by the current one.
+** Warning functions:
+** warnfoff: warning system is off
+** warnfon: ready to start a new message
+** warnfcont: previous message is to be continued
 */
-static void warnf (void *ud, const char *message, int tocont) {
-  int *previoustocont = (int *)ud;
-  if (!*previoustocont)  /* previous message was the last? */
-    lua_writestringerror("%s", "Lua warning: ");  /* start a new warning */
+static void warnfoff (void *ud, const char *message, int tocont);
+static void warnfon (void *ud, const char *message, int tocont);
+static void warnfcont (void *ud, const char *message, int tocont);
+
+
+/*
+** Check whether message is a control message. If so, execute the
+** control or ignore it if unknown.
+*/
+static int checkcontrol (lua_State *L, const char *message, int tocont) {
+  if (tocont || *(message++) != '@')  /* not a control message? */
+    return 0;
+  else {
+    if (strcmp(message, "off") == 0)
+      lua_setwarnf(L, warnfoff, L);  /* turn warnings off */
+    else if (strcmp(message, "on") == 0)
+      lua_setwarnf(L, warnfon, L);   /* turn warnings on */
+    return 1;  /* it was a control message */
+  }
+}
+
+
+static void warnfoff (void *ud, const char *message, int tocont) {
+  checkcontrol((lua_State *)ud, message, tocont);
+}
+
+
+/*
+** Writes the message and handle 'tocont', finishing the message
+** if needed and setting the next warn function.
+*/
+static void warnfcont (void *ud, const char *message, int tocont) {
+  lua_State *L = (lua_State *)ud;
   lua_writestringerror("%s", message);  /* write message */
-  if (!tocont)  /* is this the last part? */
+  if (tocont)  /* not the last part? */
+    lua_setwarnf(L, warnfcont, L);  /* to be continued */
+  else {  /* last part */
     lua_writestringerror("%s", "\n");  /* finish message with end-of-line */
-  *previoustocont = tocont;
+    lua_setwarnf(L, warnfon, L);  /* next call is a new message */
+  }
+}
+
+
+static void warnfon (void *ud, const char *message, int tocont) {
+  if (checkcontrol((lua_State *)ud, message, tocont))  /* control message? */
+    return;  /* nothing else to be done */
+  lua_writestringerror("%s", "Lua warning: ");  /* start a new warning */
+  warnfcont(ud, message, tocont);  /* finish processing */
 }
 
 
 LUALIB_API lua_State *luaL_newstate (void) {
   lua_State *L = lua_newstate(l_alloc, NULL);
   if (L) {
-    int *previoustocont;  /* space for warning state */
     lua_atpanic(L, &panic);
-    previoustocont = (int *)lua_newuserdatauv(L, sizeof(int), 0);
-    luaL_ref(L, LUA_REGISTRYINDEX);  /* make sure it won't be collected */
-    *previoustocont = 0;  /* next message starts a new warning */
-    lua_setwarnf(L, warnf, previoustocont);
+    lua_setwarnf(L, warnfoff, L);  /* default is warnings off */
   }
   return L;
 }

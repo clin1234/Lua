@@ -3,7 +3,8 @@
 
 print('testing strings and string library')
 
-local maxi, mini = math.maxinteger, math.mininteger
+local maxi <const> = math.maxinteger
+local mini <const> = math.mininteger
 
 
 local function checkerror (msg, f, ...)
@@ -55,13 +56,13 @@ a,b = string.find("123456789", "345")
 assert(string.sub("123456789", a, b) == "345")
 assert(string.find("1234567890123456789", "345", 3) == 3)
 assert(string.find("1234567890123456789", "345", 4) == 13)
-assert(string.find("1234567890123456789", "346", 4) == nil)
+assert(not string.find("1234567890123456789", "346", 4))
 assert(string.find("1234567890123456789", ".45", -9) == 13)
-assert(string.find("abcdefg", "\0", 5, 1) == nil)
+assert(not string.find("abcdefg", "\0", 5, 1))
 assert(string.find("", "") == 1)
 assert(string.find("", "", 1) == 1)
 assert(not string.find("", "", 2))
-assert(string.find('', 'aaa', 1) == nil)
+assert(not string.find('', 'aaa', 1))
 assert(('alo(.)alo'):find('(.)', 1, 1) == 4)
 
 assert(string.len("") == 0)
@@ -157,17 +158,38 @@ do  -- tests for '%p' format
   -- not much to test, as C does not specify what '%p' does.
   -- ("The value of the pointer is converted to a sequence of printing
   -- characters, in an implementation-defined manner.")
-  local null = string.format("%p", nil)
-  assert(string.format("%p", {}) ~= null)
+  local null = "(null)"    -- nulls are formatted by Lua
   assert(string.format("%p", 4) == null)
+  assert(string.format("%p", true) == null)
+  assert(string.format("%p", nil) == null)
+  assert(string.format("%p", {}) ~= null)
   assert(string.format("%p", print) ~= null)
   assert(string.format("%p", coroutine.running()) ~= null)
-  assert(string.format("%p", {}) ~= string.format("%p", {}))
-  assert(string.format("%p", string.rep("a", 10)) ==
-         string.format("%p", string.rep("a", 10)))     -- short strings
-  assert(string.format("%p", string.rep("a", 300)) ~=
-         string.format("%p", string.rep("a", 300)))     -- long strings
+  assert(string.format("%p", io.stdin) ~= null)
+  assert(string.format("%p", io.stdin) == string.format("%p", io.stdin))
+  assert(string.format("%p", print) == string.format("%p", print))
+  assert(string.format("%p", print) ~= string.format("%p", assert))
+
   assert(#string.format("%90p", {}) == 90)
+  assert(#string.format("%-60p", {}) == 60)
+  assert(string.format("%10p", false) == string.rep(" ", 10 - #null) .. null)
+  assert(string.format("%-12p", 1.5) == null .. string.rep(" ", 12 - #null))
+
+  do
+    local t1 = {}; local t2 = {}
+    assert(string.format("%p", t1) ~= string.format("%p", t2))
+  end
+
+  do     -- short strings are internalized
+    local s1 = string.rep("a", 10)
+    local s2 = string.rep("aa", 5)
+  assert(string.format("%p", s1) == string.format("%p", s2))
+  end
+
+  do     -- long strings aren't internalized
+    local s1 = string.rep("a", 300); local s2 = string.rep("a", 300)
+    assert(string.format("%p", s1) ~= string.format("%p", s2))
+  end
 end
 
 x = '"ílo"\n\\'
@@ -249,6 +271,12 @@ do    -- longest number that can be formatted
   local s = string.format('%.99f', -(10^i))
   assert(string.len(s) >= i + 101)
   assert(tonumber(s) == -(10^i))
+
+  -- limit for floats
+  assert(10^38 < math.huge)
+  local s = string.format('%.99f', -(10^38))
+  assert(string.len(s) >= 38 + 101)
+  assert(tonumber(s) == -(10^38))
 end
 
 
@@ -294,8 +322,8 @@ do print("testing 'format %a %A'")
     matchhexa(n)
   end
 
-  assert(string.find(string.format("%A", 0.0), "^0X0%.?0?P%+?0$"))
-  assert(string.find(string.format("%a", -0.0), "^%-0x0%.?0?p%+?0$"))
+  assert(string.find(string.format("%A", 0.0), "^0X0%.?0*P%+?0$"))
+  assert(string.find(string.format("%a", -0.0), "^%-0x0%.?0*p%+?0$"))
 
   if not _port then   -- test inf, -inf, NaN, and -0.0
     assert(string.find(string.format("%a", 1/0), "^inf"))
@@ -410,7 +438,7 @@ else
 
   -- formats %U, %f, %I already tested elsewhere
 
-  local blen = 400    -- internal buffer length in 'luaO_pushfstring'
+  local blen = 200    -- internal buffer length in 'luaO_pushfstring'
 
   local function callpfs (op, fmt, n)
     local x = {T.testC("pushfstring" .. op .. "; return *", fmt, n)}

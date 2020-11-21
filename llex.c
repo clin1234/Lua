@@ -29,7 +29,7 @@
 
 
 
-#define next(ls) (ls->current = zgetc(ls->z))
+#define next(ls)	(ls->current = zgetc(ls->z))
 
 
 
@@ -81,7 +81,6 @@ void luaX_init (lua_State *L) {
 
 const char *luaX_token2str (LexState *ls, int token) {
   if (token < FIRST_RESERVED) {  /* single-byte symbols? */
-    lua_assert(token == cast_uchar(token));
     if (lisprint(token))
       return luaO_pushfstring(ls->L, "'%c'", token);
     else  /* control character */
@@ -136,7 +135,7 @@ TString *luaX_newstring (LexState *ls, const char *str, size_t l) {
   if (isempty(o)) {  /* not in use yet? */
     /* boolean value does not need GC barrier;
        table is not a metatable, so it does not need to invalidate cache */
-    setbvalue(o, 1);  /* t[string] = true */
+    setbtvalue(o);  /* t[string] = true */
     luaC_checkGC(L);
   }
   else {  /* string already present */
@@ -211,8 +210,16 @@ static int check_next2 (LexState *ls, const char *set) {
 
 /* LUA_NUMBER */
 /*
-** this function is quite liberal in what it accepts, as 'luaO_str2num'
-** will reject ill-formed numerals.
+** This function is quite liberal in what it accepts, as 'luaO_str2num'
+** will reject ill-formed numerals. Roughly, it accepts the following
+** pattern:
+**
+**   %d(%x|%.|([Ee][+-]?))* | 0[Xx](%x|%.|([Pp][+-]?))*
+**
+** The only tricky part is to accept [+-] only after a valid exponent
+** mark, to avoid reading '3-4' or '0xe+1' as a single number.
+**
+** The caller might have already read an initial dot.
 */
 static int read_numeral (LexState *ls, SemInfo *seminfo) {
   TValue obj;
@@ -223,15 +230,13 @@ static int read_numeral (LexState *ls, SemInfo *seminfo) {
   if (first == '0' && check_next2(ls, "xX"))  /* hexadecimal? */
     expo = "Pp";
   for (;;) {
-    if (check_next2(ls, expo))  /* exponent part? */
+    if (check_next2(ls, expo))  /* exponent mark? */
       check_next2(ls, "-+");  /* optional exponent sign */
-    if (lisxdigit(ls->current))
-      save_and_next(ls);
-    else if (ls->current == '.')
+    else if (lisxdigit(ls->current) || ls->current == '.')  /* '%x|%.' */
       save_and_next(ls);
     else break;
   }
-  if (lislalnum(ls->current))  /* is numeral touching an alpha num? */
+  if (lislalpha(ls->current))  /* is numeral touching a letter? */
     save_and_next(ls);  /* force an error */
   save(ls, '\0');
   if (luaO_str2num(luaZ_buffer(ls->buff), &obj) == 0)  /* format error? */
@@ -249,9 +254,10 @@ static int read_numeral (LexState *ls, SemInfo *seminfo) {
 
 
 /*
-** reads a sequence '[=*[' or ']=*]', leaving the last bracket.
-** If sequence is well formed, return its number of '='s + 2; otherwise,
-** return 1 if there is no '='s or 0 otherwise (an unfinished '[==...').
+** read a sequence '[=*[' or ']=*]', leaving the last bracket. If
+** sequence is well formed, return its number of '='s + 2; otherwise,
+** return 1 if it is a single bracket (no '='s and no 2nd bracket);
+** otherwise (an unfinished '[==...') return 0.
 */
 static size_t skip_sep (LexState *ls) {
   size_t count = 0;
@@ -337,7 +343,7 @@ static unsigned long readutf8esc (LexState *ls) {
   save_and_next(ls);  /* skip 'u' */
   esccheck(ls, ls->current == '{', "missing '{'");
   r = gethexa(ls);  /* must have at least one digit */
-  while ((save_and_next(ls), lisxdigit(ls->current))) {
+  while (cast_void(save_and_next(ls)), lisxdigit(ls->current)) {
     i++;
     esccheck(ls, r <= (0x7FFFFFFFu >> 4), "UTF-8 value too large");
     r = (r << 4) + luaO_hexavalue(ls->current);
@@ -476,34 +482,34 @@ static int llex (LexState *ls, SemInfo *seminfo) {
       }
       case '=': {
         next(ls);
-        if (check_next1(ls, '=')) return TK_EQ;
+        if (check_next1(ls, '=')) return TK_EQ;  /* '==' */
         else return '=';
       }
       case '<': {
         next(ls);
-        if (check_next1(ls, '=')) return TK_LE;
-        else if (check_next1(ls, '<')) return TK_SHL;
+        if (check_next1(ls, '=')) return TK_LE;  /* '<=' */
+        else if (check_next1(ls, '<')) return TK_SHL;  /* '<<' */
         else return '<';
       }
       case '>': {
         next(ls);
-        if (check_next1(ls, '=')) return TK_GE;
-        else if (check_next1(ls, '>')) return TK_SHR;
+        if (check_next1(ls, '=')) return TK_GE;  /* '>=' */
+        else if (check_next1(ls, '>')) return TK_SHR;  /* '>>' */
         else return '>';
       }
       case '/': {
         next(ls);
-        if (check_next1(ls, '/')) return TK_IDIV;
+        if (check_next1(ls, '/')) return TK_IDIV;  /* '//' */
         else return '/';
       }
       case '~': {
         next(ls);
-        if (check_next1(ls, '=')) return TK_NE;
+        if (check_next1(ls, '=')) return TK_NE;  /* '~=' */
         else return '~';
       }
       case ':': {
         next(ls);
-        if (check_next1(ls, ':')) return TK_DBCOLON;
+        if (check_next1(ls, ':')) return TK_DBCOLON;  /* '::' */
         else return ':';
       }
       case '"': case '\'': {  /* short literal strings */
@@ -542,7 +548,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
             return TK_NAME;
           }
         }
-        else {  /* single-char tokens (+ - / ...) */
+        else {  /* single-char tokens ('+', '*', '%', '{', '}', ...) */
           int c = ls->current;
           next(ls);
           return c;

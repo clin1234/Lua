@@ -14,6 +14,7 @@
 
 #include "lua.h"
 
+
 /*
 ** 'lu_mem' and 'l_mem' are unsigned/signed integers big enough to count
 ** the total memory used by Lua (in bytes). Usually, 'size_t' and
@@ -22,7 +23,7 @@
 #if defined(LUAI_MEM)		/* { external definitions? */
 typedef LUAI_UMEM lu_mem;
 typedef LUAI_MEM l_mem;
-#elif LUAI_BITSINT >= 32	/* }{ */
+#elif LUAI_IS32INT	/* }{ */
 typedef size_t lu_mem;
 typedef ptrdiff_t l_mem;
 #else  /* 16-bit ints */	/* }{ */
@@ -83,7 +84,15 @@ typedef LUAI_UACNUMBER l_uacNumber;
 typedef LUAI_UACINT l_uacInt;
 
 
-/* internal assertions for in-house debugging */
+/*
+** Internal assertions for in-house debugging
+*/
+#if defined LUAI_ASSERT
+#undef NDEBUG
+#include <assert.h>
+#define lua_assert(c)           assert(c)
+#endif
+
 #if defined(lua_assert)
 #define check_exp(c,e)		(lua_assert(c), (e))
 /* to avoid problems with conditions too long */
@@ -98,7 +107,7 @@ typedef LUAI_UACINT l_uacInt;
 ** assertion for checking API calls
 */
 #if !defined(luai_apicheck)
-#define luai_apicheck(l,e)	lua_assert(e)
+#define luai_apicheck(l,e)	((void)l, lua_assert(e))
 #endif
 
 #define api_check(l,e,msg)	luai_apicheck(l,(e) && msg)
@@ -172,13 +181,11 @@ typedef LUAI_UACINT l_uacInt;
 #endif
 
 
-
-
 /*
 ** type for virtual-machine instructions;
 ** must be an unsigned with (at least) 4 bytes (see details in lopcodes.h)
 */
-#if LUAI_BITSINT >= 32
+#if LUAI_IS32INT
 typedef unsigned int l_uint32;
 #else
 typedef unsigned long l_uint32;
@@ -224,6 +231,17 @@ typedef l_uint32 Instruction;
 /* minimum size for string buffer */
 #if !defined(LUA_MINBUFFER)
 #define LUA_MINBUFFER	32
+#endif
+
+
+/*
+** Maximum depth for nested C calls, syntactical nested non-terminals,
+** and other features implemented through recursion in C. (Value must
+** fit in a 16-bit unsigned integer. It must also be compatible with
+** the size of the C stack.)
+*/
+#if !defined(LUAI_MAXCCALLS)
+#define LUAI_MAXCCALLS		200
 #endif
 
 
@@ -308,7 +326,8 @@ typedef l_uint32 Instruction;
 
 /* exponentiation */
 #if !defined(luai_numpow)
-#define luai_numpow(L,a,b)      ((void)L, l_mathop(pow)(a,b))
+#define luai_numpow(L,a,b)  \
+  ((void)L, (b == 2) ? (a)*(a) : l_mathop(pow)(a,b))
 #endif
 
 /* the others are quite standard operations */
@@ -337,7 +356,7 @@ typedef l_uint32 Instruction;
 #else
 /* realloc stack keeping its size */
 #define condmovestack(L,pre,pos)  \
-  { int sz_ = (L)->stacksize; pre; luaD_reallocstack((L), sz_, 0); pos; }
+  { int sz_ = stacksize(L); pre; luaD_reallocstack((L), sz_, 0); pos; }
 #endif
 
 #if !defined(HARDMEMTESTS)

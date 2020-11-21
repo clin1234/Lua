@@ -16,7 +16,7 @@
 
 
 /* global table */
-#define	LUA_GNAME	"_G"
+#define LUA_GNAME	"_G"
 
 
 typedef struct luaL_Buffer luaL_Buffer;
@@ -153,6 +153,10 @@ LUALIB_API void (luaL_requiref) (lua_State *L, const char *modname,
 #define luaL_loadbuffer(L,s,sz,n)	luaL_loadbufferx(L,s,sz,n,NULL)
 
 
+/* push the value used to represent failure/error */
+#define luaL_pushfail(L)	lua_pushnil(L)
+
+
 /*
 ** {======================================================
 ** Generic Buffer manipulation
@@ -180,6 +184,8 @@ struct luaL_Buffer {
    ((B)->b[(B)->n++] = (c)))
 
 #define luaL_addsize(B,s)	((B)->n += (s))
+
+#define luaL_buffsub(B,s)	((B)->n -= (s))
 
 LUALIB_API void (luaL_buffinit) (lua_State *L, luaL_Buffer *B);
 LUALIB_API char *(luaL_prepbuffsize) (luaL_Buffer *B, size_t sz);

@@ -23,16 +23,6 @@
 
 
 /*
-** Lua will use at most ~(2^LUAI_HASHLIMIT) bytes from a string to
-** compute its hash
-*/
-#if !defined(LUAI_HASHLIMIT)
-#define LUAI_HASHLIMIT		5
-#endif
-
-
-
-/*
 ** Maximum size for string table.
 */
 #define MAXSTRTB	cast_int(luaM_limitN(MAX_INT, TString*))
@@ -43,7 +33,7 @@
 */
 int luaS_eqlngstr (TString *a, TString *b) {
   size_t len = a->u.lnglen;
-  lua_assert(a->tt == LUA_TLNGSTR && b->tt == LUA_TLNGSTR);
+  lua_assert(a->tt == LUA_VLNGSTR && b->tt == LUA_VLNGSTR);
   return (a == b) ||  /* same instance or... */
     ((len == b->u.lnglen) &&  /* equal length and ... */
      (memcmp(getstr(a), getstr(b), len) == 0));  /* equal contents */
@@ -52,17 +42,17 @@ int luaS_eqlngstr (TString *a, TString *b) {
 
 unsigned int luaS_hash (const char *str, size_t l, unsigned int seed) {
   unsigned int h = seed ^ cast_uint(l);
-  size_t step = (l >> LUAI_HASHLIMIT) + 1;
-  for (; l >= step; l -= step)
+  for (; l > 0; l--)
     h ^= ((h<<5) + (h>>2) + cast_byte(str[l - 1]));
   return h;
 }
 
 
 unsigned int luaS_hashlongstr (TString *ts) {
-  lua_assert(ts->tt == LUA_TLNGSTR);
+  lua_assert(ts->tt == LUA_VLNGSTR);
   if (ts->extra == 0) {  /* no hash? */
-    ts->hash = luaS_hash(getstr(ts), ts->u.lnglen, ts->hash);
+    size_t len = ts->u.lnglen;
+    ts->hash = luaS_hash(getstr(ts), len, ts->hash);
     ts->extra = 1;  /* now it has its hash */
   }
   return ts->hash;
@@ -121,8 +111,8 @@ void luaS_clearcache (global_State *g) {
   int i, j;
   for (i = 0; i < STRCACHE_N; i++)
     for (j = 0; j < STRCACHE_M; j++) {
-    if (iswhite(g->strcache[i][j]))  /* will entry be collected? */
-      g->strcache[i][j] = g->memerrmsg;  /* replace it with something fixed */
+      if (iswhite(g->strcache[i][j]))  /* will entry be collected? */
+        g->strcache[i][j] = g->memerrmsg;  /* replace it with something fixed */
     }
 }
 
@@ -165,7 +155,7 @@ static TString *createstrobj (lua_State *L, size_t l, int tag, unsigned int h) {
 
 
 TString *luaS_createlngstrobj (lua_State *L, size_t l) {
-  TString *ts = createstrobj(L, l, LUA_TLNGSTR, G(L)->seed);
+  TString *ts = createstrobj(L, l, LUA_VLNGSTR, G(L)->seed);
   ts->u.lnglen = l;
   return ts;
 }
@@ -215,7 +205,7 @@ static TString *internshrstr (lua_State *L, const char *str, size_t l) {
     growstrtab(L, tb);
     list = &tb->hash[lmod(h, tb->size)];  /* rehash with new size */
   }
-  ts = createstrobj(L, l, LUA_TSHRSTR, h);
+  ts = createstrobj(L, l, LUA_VSHRSTR, h);
   memcpy(getstr(ts), str, l * sizeof(char));
   ts->shrlen = cast_byte(l);
   ts->u.hnext = *list;
@@ -271,7 +261,7 @@ Udata *luaS_newudata (lua_State *L, size_t s, int nuvalue) {
   GCObject *o;
   if (unlikely(s > MAX_SIZE - udatamemoffset(nuvalue)))
     luaM_toobig(L);
-  o = luaC_newobj(L, LUA_TUSERDATA, sizeudata(nuvalue, s));
+  o = luaC_newobj(L, LUA_VUSERDATA, sizeudata(nuvalue, s));
   u = gco2u(o);
   u->len = s;
   u->nuvalue = nuvalue;

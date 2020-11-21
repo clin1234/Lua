@@ -107,7 +107,9 @@ end
 deep(10)
 deep(180)
 
--- testing tail calls
+
+print"testing tail calls"
+
 function deep (n) if n>0 then return deep(n-1) else return 101 end end
 assert(deep(30000) == 101)
 a = {}
@@ -148,7 +150,45 @@ do   -- tail calls x varargs
   assert(X == 10 and Y == 20 and #A == 1 and A[1] == 30)
 end
 
+
+
+do   -- tail calls x chain of __call
+  local n = 10000   -- depth
+
+  local function foo ()
+    if n == 0 then return 1023
+    else n = n - 1; return foo()
+    end
+  end
+
+  -- build a chain of __call metamethods ending in function 'foo'
+  for i = 1, 100 do
+    foo = setmetatable({}, {__call = foo})
+  end
+
+  -- call the first one as a tail call in a new coroutine
+  -- (to ensure stack is not preallocated)
+  assert(coroutine.wrap(function() return foo() end)() == 1023)
+end
+
 print('+')
+
+
+do  -- testing chains of '__call'
+  local N = 20
+  local u = table.pack
+  for i = 1, N do
+    u = setmetatable({i}, {__call = u})
+  end
+
+  local Res = u("a", "b", "c")
+
+  assert(Res.n == N + 3)
+  for i = 1, N do
+    assert(Res[i][1] == i)
+  end
+  assert(Res[N + 1] == "a" and Res[N + 2] == "b" and Res[N + 3] == "c")
+end
 
 
 a = nil
@@ -277,6 +317,16 @@ f = load(string.dump(function () return 1 end), nil, "b", {})
 assert(type(f) == "function" and f() == 1)
 
 
+do   -- another bug (in 5.4.0)
+  -- loading a binary long string interrupted by GC cycles
+  local f = string.dump(function ()
+    return '01234567890123456789012345678901234567890123456789'
+  end)
+  f = load(read1(f))
+  assert(f() == '01234567890123456789012345678901234567890123456789')
+end
+
+
 x = string.dump(load("x = 1; return x"))
 a = assert(load(read1(x), nil, "b"))
 assert(a() == 1 and _G.x == 1)
@@ -318,8 +368,12 @@ x = [[
    end
   end
 ]]
+a = assert(load(read1(x), "read", "t"))
+assert(a()(2)(3)(10) == 15)
 
-a = assert(load(read1(x)))
+-- repeat the test loading a binary chunk
+x = string.dump(a)
+a = assert(load(read1(x), "read", "b"))
 assert(a()(2)(3)(10) == 15)
 
 
@@ -382,20 +436,30 @@ assert((function (a) return a end)() == nil)
 
 print("testing binary chunks")
 do
-  local header = string.pack("c4BBBc6BBBj",
+  local header = string.pack("c4BBc6BBB",
     "\27Lua",                                  -- signature
-    (504 >> 7) & 0x7f, (504 & 0x7f) | 0x80,    -- version 5.4 (504)
+    0x54,                                      -- version 5.4 (0x54)
     0,                                         -- format
     "\x19\x93\r\n\x1a\n",                      -- data
     4,                                         -- size of instruction
     string.packsize("j"),                      -- sizeof(lua integer)
-    string.packsize("n"),                      -- sizeof(lua number)
-    0x5678                                     -- LUAC_INT
-    -- LUAC_NUM may not have a unique binary representation (padding...)
+    string.packsize("n")                       -- sizeof(lua number)
   )
-  local c = string.dump(function () local a = 1; local b = 3; return a+b*3 end)
+  local c = string.dump(function ()
+    local a = 1; local b = 3;
+    local f = function () return a + b + _ENV.c; end    -- upvalues
+    local s1 = "a constant"
+    local s2 = "another constant"
+    return a + b * 3
+  end)
 
+  assert(assert(load(c))() == 10)
+
+  -- check header
   assert(string.sub(c, 1, #header) == header)
+  -- check LUAC_INT and LUAC_NUM
+  local ci, cn = string.unpack("jn", c, #header + 1)
+  assert(ci == 0x5678 and cn == 370.5)
 
   -- corrupted header
   for i = 1, #header do
@@ -411,7 +475,6 @@ do
     local st, msg = load(string.sub(c, 1, i))
     assert(not st and string.find(msg, "truncated"))
   end
-  assert(assert(load(c))() == 10)
 end
 
 print('OK')

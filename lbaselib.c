@@ -37,9 +37,20 @@ static int luaB_print (lua_State *L) {
 }
 
 
+/*
+** Creates a warning with all given arguments.
+** Check first for errors; otherwise an error may interrupt
+** the composition of a warning, leaving it unfinished.
+*/
 static int luaB_warn (lua_State *L) {
-  const char *msg = luaL_checkstring(L, 1);
-  lua_warning(L, msg, lua_toboolean(L, 2));
+  int n = lua_gettop(L);  /* number of arguments */
+  int i;
+  luaL_checkstring(L, 1);  /* at least one argument */
+  for (i = 2; i <= n; i++)
+    luaL_checkstring(L, i);  /* make sure all arguments are strings */
+  for (i = 1; i < n; i++)  /* compose warning */
+    lua_warning(L, lua_tostring(L, i), 1);
+  lua_warning(L, lua_tostring(L, n), 0);  /* close warning */
   return 0;
 }
 
@@ -95,7 +106,7 @@ static int luaB_tonumber (lua_State *L) {
       return 1;
     }  /* else not a number */
   }  /* else not a number */
-  lua_pushnil(L);  /* not a number */
+  luaL_pushfail(L);  /* not a number */
   return 1;
 }
 
@@ -297,9 +308,9 @@ static int load_aux (lua_State *L, int status, int envidx) {
     return 1;
   }
   else {  /* error (message is on top of the stack) */
-    lua_pushnil(L);
+    luaL_pushfail(L);
     lua_insert(L, -2);  /* put before error message */
-    return 2;  /* return nil plus error message */
+    return 2;  /* return fail plus error message */
   }
 }
 

@@ -206,22 +206,38 @@ static int str_char (lua_State *L) {
 }
 
 
-static int writer (lua_State *L, const void *b, size_t size, void *B) {
-  (void)L;
-  luaL_addlstring((luaL_Buffer *) B, (const char *)b, size);
+/*
+** Buffer to store the result of 'string.dump'. It must be initialized
+** after the call to 'lua_dump', to ensure that the function is on the
+** top of the stack when 'lua_dump' is called. ('luaL_buffinit' might
+** push stuff.)
+*/
+struct str_Writer {
+  int init;  /* true iff buffer has been initialized */
+  luaL_Buffer B;
+};
+
+
+static int writer (lua_State *L, const void *b, size_t size, void *ud) {
+  struct str_Writer *state = (struct str_Writer *)ud;
+  if (!state->init) {
+    state->init = 1;
+    luaL_buffinit(L, &state->B);
+  }
+  luaL_addlstring(&state->B, (const char *)b, size);
   return 0;
 }
 
 
 static int str_dump (lua_State *L) {
-  luaL_Buffer b;
+  struct str_Writer state;
   int strip = lua_toboolean(L, 2);
   luaL_checktype(L, 1, LUA_TFUNCTION);
-  lua_settop(L, 1);
-  luaL_buffinit(L,&b);
-  if (lua_dump(L, writer, &b, strip) != 0)
+  lua_settop(L, 1);  /* ensure function is on the top of the stack */
+  state.init = 0;
+  if (lua_dump(L, writer, &state, strip) != 0)
     return luaL_error(L, "unable to dump given function");
-  luaL_pushresult(&b);
+  luaL_pushresult(&state.B);
   return 1;
 }
 
@@ -232,6 +248,17 @@ static int str_dump (lua_State *L) {
 ** METAMETHODS
 ** =======================================================
 */
+
+#if defined(LUA_NOCVTS2N)	/* { */
+
+/* no coercion from strings to numbers */
+
+static const luaL_Reg stringmetamethods[] = {
+  {"__index", NULL},  /* placeholder */
+  {NULL, NULL}
+};
+
+#else		/* }{ */
 
 static int tonum (lua_State *L, int arg) {
   if (lua_type(L, arg) == LUA_TNUMBER) {  /* already a number? */
@@ -310,6 +337,8 @@ static const luaL_Reg stringmetamethods[] = {
   {"__index", NULL},  /* placeholder */
   {NULL, NULL}
 };
+
+#endif		/* } */
 
 /* }====================================================== */
 
@@ -744,7 +773,7 @@ static int str_find_aux (lua_State *L, int find) {
   const char *p = luaL_checklstring(L, 2, &lp);
   size_t init = posrelatI(luaL_optinteger(L, 3, 1), ls) - 1;
   if (init > ls) {  /* start after string's end? */
-    lua_pushnil(L);  /* cannot find anything */
+    luaL_pushfail(L);  /* cannot find anything */
     return 1;
   }
   /* explicit request or no special characters? */
@@ -779,7 +808,7 @@ static int str_find_aux (lua_State *L, int find) {
       }
     } while (s1++ < ms.src_end && !anchor);
   }
-  lua_pushnil(L);  /* not found */
+  luaL_pushfail(L);  /* not found */
   return 1;
 }
 
@@ -975,7 +1004,7 @@ static int str_gsub (lua_State *L) {
 ** to nibble boundaries by making what is left after that first digit a
 ** multiple of 4.
 */
-#define L_NBFD		((l_mathlim(MANT_DIG) - 1)%4 + 1)
+#define L_NBFD		((l_floatatt(MANT_DIG) - 1)%4 + 1)
 
 
 /*
@@ -1043,7 +1072,7 @@ static int lua_number2strx (lua_State *L, char *buff, int sz,
 ** and '\0') + number of decimal digits to represent maxfloat (which
 ** is maximum exponent + 1). (99+3+1, adding some extra, 110)
 */
-#define MAX_ITEMF	(110 + l_mathlim(MAX_10_EXP))
+#define MAX_ITEMF	(110 + l_floatatt(MAX_10_EXP))
 
 
 /*
@@ -1058,7 +1087,10 @@ static int lua_number2strx (lua_State *L, char *buff, int sz,
 
 
 /* valid flags in a format specification */
-#define FLAGS	"-+ #0"
+#if !defined(L_FMTFLAGS)
+#define L_FMTFLAGS	"-+ #0"
+#endif
+
 
 /*
 ** maximum size of each format specification (such as "%-099.99d")
@@ -1156,8 +1188,8 @@ static void addliteral (lua_State *L, luaL_Buffer *b, int arg) {
 
 static const char *scanformat (lua_State *L, const char *strfrmt, char *form) {
   const char *p = strfrmt;
-  while (*p != '\0' && strchr(FLAGS, *p) != NULL) p++;  /* skip flags */
-  if ((size_t)(p - strfrmt) >= sizeof(FLAGS)/sizeof(char))
+  while (*p != '\0' && strchr(L_FMTFLAGS, *p) != NULL) p++;  /* skip flags */
+  if ((size_t)(p - strfrmt) >= sizeof(L_FMTFLAGS)/sizeof(char))
     luaL_error(L, "invalid format (repeated flags)");
   if (isdigit(uchar(*p))) p++;  /* skip width */
   if (isdigit(uchar(*p))) p++;  /* (2 digits at most) */
@@ -1227,20 +1259,22 @@ static int str_format (lua_State *L) {
           nb = lua_number2strx(L, buff, maxitem, form,
                                   luaL_checknumber(L, arg));
           break;
-        case 'e': case 'E': case 'f':
-        case 'g': case 'G': {
+        case 'f':
+          maxitem = MAX_ITEMF;  /* extra space for '%f' */
+          buff = luaL_prepbuffsize(&b, maxitem);
+          /* FALLTHROUGH */
+        case 'e': case 'E': case 'g': case 'G': {
           lua_Number n = luaL_checknumber(L, arg);
-          if (*(strfrmt - 1) == 'f' && l_mathop(fabs)(n) >= 1e100) {
-            /* 'n' needs more than 99 digits */
-            maxitem = MAX_ITEMF;  /* extra space for '%f' */
-            buff = luaL_prepbuffsize(&b, maxitem);
-          }
           addlenmod(form, LUA_NUMBER_FRMLEN);
           nb = l_sprintf(buff, maxitem, form, (LUAI_UACNUMBER)n);
           break;
         }
         case 'p': {
           const void *p = lua_topointer(L, arg);
+          if (p == NULL) {  /* avoid calling 'printf' with argument NULL */
+            p = "(null)";  /* result */
+            form[strlen(form) - 1] = 's';  /* format it as a string */
+          }
           nb = l_sprintf(buff, maxitem, form, p);
           break;
         }
@@ -1331,7 +1365,6 @@ typedef union Ftypes {
   float f;
   double d;
   lua_Number n;
-  char buff[5 * sizeof(lua_Number)];  /* enough for any float type */
 } Ftypes;
 
 
@@ -1501,12 +1534,10 @@ static void packint (luaL_Buffer *b, lua_Unsigned n,
 ** Copy 'size' bytes from 'src' to 'dest', correcting endianness if
 ** given 'islittle' is different from native endianness.
 */
-static void copywithendian (volatile char *dest, volatile const char *src,
+static void copywithendian (char *dest, const char *src,
                             int size, int islittle) {
-  if (islittle == nativeendian.little) {
-    while (size-- != 0)
-      *(dest++) = *(src++);
-  }
+  if (islittle == nativeendian.little)
+    memcpy(dest, src, size);
   else {
     dest += size - 1;
     while (size-- != 0)
@@ -1550,14 +1581,14 @@ static int str_pack (lua_State *L) {
         break;
       }
       case Kfloat: {  /* floating-point options */
-        volatile Ftypes u;
+        Ftypes u;
         char *buff = luaL_prepbuffsize(&b, size);
         lua_Number n = luaL_checknumber(L, arg);  /* get argument */
         if (size == sizeof(u.f)) u.f = (float)n;  /* copy it into 'u' */
         else if (size == sizeof(u.d)) u.d = (double)n;
         else u.n = n;
         /* move 'u' to final result, correcting endianness if needed */
-        copywithendian(buff, u.buff, size, h.islittle);
+        copywithendian(buff, (char *)&u, size, h.islittle);
         luaL_addsize(&b, size);
         break;
       }
@@ -1683,9 +1714,9 @@ static int str_unpack (lua_State *L) {
         break;
       }
       case Kfloat: {
-        volatile Ftypes u;
+        Ftypes u;
         lua_Number num;
-        copywithendian(u.buff, data + pos, size, h.islittle);
+        copywithendian((char *)&u, data + pos, size, h.islittle);
         if (size == sizeof(u.f)) num = (lua_Number)u.f;
         else if (size == sizeof(u.d)) num = (lua_Number)u.d;
         else num = u.n;
@@ -1704,7 +1735,7 @@ static int str_unpack (lua_State *L) {
         break;
       }
       case Kzstr: {
-        size_t len = (int)strlen(data + pos);
+        size_t len = strlen(data + pos);
         luaL_argcheck(L, pos + len < ld, 2,
                          "unfinished string for format 'z'");
         lua_pushlstring(L, data + pos, len);

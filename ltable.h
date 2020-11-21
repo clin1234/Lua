@@ -15,7 +15,12 @@
 #define gnext(n)	((n)->u.next)
 
 
-#define invalidateTMcache(t)	((t)->flags = 0)
+/*
+** Clear all bits of fast-access metamethods, which means that the table
+** may have any of these metamethods. (First access that fails after the
+** clearing will set the bit again.)
+*/
+#define invalidateTMcache(t)	((t)->flags &= ~maskflags)
 
 
 /* true when 't' is using 'dummynode' as its hash part */
@@ -27,7 +32,7 @@
 
 
 /* returns the Node, given the value of a table entry */
-#define nodefromval(v) 	cast(Node *, (v))
+#define nodefromval(v)	cast(Node *, (v))
 
 
 LUAI_FUNC const TValue *luaH_getint (Table *t, lua_Integer key);

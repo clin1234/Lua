@@ -182,7 +182,7 @@ assert(~a == a); checkcap{"bnot", a, a}
 assert(a << 3 == a); checkcap{"shl", a, 3}
 assert(1.5 >> a == 1.5); checkcap{"shr", 1.5, a}
 
--- for comparsion operators, all results are true
+-- for comparison operators, all results are true
 assert(5.0 > a); checkcap{"lt", a, 5.0}
 assert(a >= 10); checkcap{"le", 10, a}
 assert(a <= -10.0); checkcap{"le", a, -10.0}
@@ -217,9 +217,16 @@ t.__le = function (a,b,c)
  return a<=b, "dummy"
 end
 
+t.__eq = function (a,b,c)
+  assert(c == nil)
+  if type(a) == 'table' then a = a.x end
+  if type(b) == 'table' then b = b.x end
+ return a == b, "dummy"
+end
+
 function Op(x) return setmetatable({x=x}, t) end
 
-local function test ()
+local function test (a, b, c)
   assert(not(Op(1)<Op(1)) and (Op(1)<Op(2)) and not(Op(2)<Op(1)))
   assert(not(1 < Op(1)) and (Op(1) < 2) and not(2 < Op(1)))
   assert(not(Op('a')<Op('a')) and (Op('a')<Op('b')) and not(Op('b')<Op('a')))
@@ -232,9 +239,13 @@ local function test ()
   assert((1 >= Op(1)) and not(1 >= Op(2)) and (Op(2) >= 1))
   assert((Op('a')>=Op('a')) and not(Op('a')>=Op('b')) and (Op('b')>=Op('a')))
   assert(('a' >= Op('a')) and not(Op('a') >= 'b') and (Op('b') >= Op('a')))
+  assert(Op(1) == Op(1) and Op(1) ~= Op(2))
+  assert(Op('a') == Op('a') and Op('a') ~= Op('b'))
+  assert(a == a and a ~= b)
+  assert(Op(3) == c)
 end
 
-test()
+test(Op(1), Op(2), Op(3))
 
 
 -- test `partial order'
@@ -294,6 +305,17 @@ t[Set{1,3,5}] = 1
 assert(t[Set{1,3,5}] == undef)
 
 
+do   -- test invalidating flags
+  local mt = {__eq = true}
+  local a = setmetatable({10}, mt)
+  local b = setmetatable({10}, mt)
+  mt.__eq = nil
+  assert(a ~= b)   -- no metamethod
+  mt.__eq = function (x,y) return x[1] == y[1] end
+  assert(a == b)   -- must use metamethod now
+end
+
+
 if not T then
   (Message or print)('\n >>> testC not active: skipping tests for \z
 userdata <<<\n')
@@ -314,6 +336,7 @@ else
   assert(u1 == u3 and u3 == u1 and u1 ~= u2)
   assert(u2 == u1 and u2 == u3 and u3 == u2)
   assert(u2 ~= {})   -- different types cannot be equal
+  assert(rawequal(u1, u1) and not rawequal(u1, u3))
 
   local mirror = {}
   debug.setmetatable(u3, {__index = mirror, __newindex = mirror})

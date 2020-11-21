@@ -1,11 +1,11 @@
-# makefile for building Lua
-# see INSTALL for installation instructions
-# see ../Makefile and luaconf.h for further customization
+# Developer's makefile for building Lua
+# see luaconf.h for further customization
 
 # == CHANGE THE SETTINGS BELOW TO SUIT YOUR ENVIRONMENT =======================
 
 # Warnings valid for both C and C++
 CWARNSCPP= \
+	-fmax-errors=5 \
 	-Wextra \
 	-Wshadow \
 	-Wsign-compare \
@@ -14,14 +14,13 @@ CWARNSCPP= \
 	-Wredundant-decls \
 	-Wdisabled-optimization \
 	-Wdouble-promotion \
-	#-Wno-aggressive-loop-optimizations \
-	#-Wlogical-op \
-	#-Wfatal-errors \
-	#-Wstrict-aliasing=3 \
+	-Wlogical-op \
+	-Wno-aggressive-loop-optimizations \
+        # the next warnings might be useful sometimes,
+	# but usually they generate too much noise
 	# -Werror \
 	# -pedantic   # warns if we use jump tables \
-	# the next warnings generate too much noise, so they are disabled
-	# -Wconversion  -Wno-sign-conversion \
+	# -Wconversion  \
 	# -Wsign-conversion \
 	# -Wstrict-overflow=2 \
 	# -Wformat=2 \
@@ -38,18 +37,26 @@ CWARNSC= -Wdeclaration-after-statement \
 
 CWARNS= $(CWARNSCPP) $(CWARNSC)
 
+# Some useful compiler options for internal tests:
+# -DLUAI_ASSERT turns on all assertions inside Lua.
+# -DHARDSTACKTESTS forces a reallocation of the stack at every point where
+# the stack can be reallocated.
+# -DHARDMEMTESTS forces a full collection at all points where the collector
+# can run.
+# -DEMERGENCYGCTESTS forces an emergency collection at every single allocation.
+# -DEXTERNMEMCHECK removes internal consistency checking of blocks being
+# deallocated (useful when an external tool like valgrind does the check).
+# -DMAXINDEXRK=k limits range of constants in RK instruction operands.
+# -DLUA_COMPAT_5_3
 
-# -DEXTERNMEMCHECK -DHARDSTACKTESTS -DHARDMEMTESTS -DTRACEMEM='"tempmem"'
-# -DMAXINDEXRK=1
-# -g -DLUA_USER_H='"ltests.h"'
 # -pg -malign-double
 # -DLUA_USE_CTYPE -DLUA_USE_APICHECK
 # ('-ftrapv' for runtime checks of integer overflows)
 # -fsanitize=undefined -ftrapv -fno-inline
-TESTS= -DLUA_USER_H='"ltests.h"' -O0
+# TESTS= -DLUA_USER_H='"ltests.h"' -O0 -g
 
 
-# LOCAL = $(TESTS) $(CWARNS) -g
+LOCAL = $(TESTS) $(CWARNS)
 
 
 # enable Linux goodies
@@ -82,11 +89,9 @@ LIB_O=	lbaselib.o ldblib.o liolib.o lmathlib.o loslib.o ltablib.o lstrlib.o \
 LUA_T=	lua
 LUA_O=	lua.o
 
-# LUAC_T=	luac
-# LUAC_O=	luac.o print.o
 
-ALL_T= $(CORE_T) $(LUA_T) $(LUAC_T)
-ALL_O= $(CORE_O) $(LUA_O) $(LUAC_O) $(AUX_O) $(LIB_O)
+ALL_T= $(CORE_T) $(LUA_T)
+ALL_O= $(CORE_O) $(LUA_O) $(AUX_O) $(LIB_O)
 ALL_A= $(CORE_T)
 
 all:	$(ALL_T)
@@ -103,11 +108,8 @@ $(CORE_T): $(CORE_O) $(AUX_O) $(LIB_O)
 $(LUA_T): $(LUA_O) $(CORE_T)
 	$(CC) -o $@ $(MYLDFLAGS) $(LUA_O) $(CORE_T) $(LIBS) $(MYLIBS) $(DL)
 
-$(LUAC_T): $(LUAC_O) $(CORE_T)
-	$(CC) -o $@ $(MYLDFLAGS) $(LUAC_O) $(CORE_T) $(LIBS) $(MYLIBS)
 
 clean:
-	rcsclean -u
 	$(RM) $(ALL_T) $(ALL_O)
 
 depend:
